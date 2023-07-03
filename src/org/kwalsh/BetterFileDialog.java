@@ -39,6 +39,8 @@ import org.eclipse.swt.widgets.Shell;
 
 public class BetterFileDialog {
 
+  public static final String version = "1.0.1";
+
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
 
@@ -136,24 +138,35 @@ public class BetterFileDialog {
    * @param parent - used for dialog positioning on Windows and Linux. May be
    *    null. On MacOS, the dialog is always centered on the screen.
    * @param title - title for the dialog, or null for system default title.
-   * @param initialDir - set initial directory for Windows and Linux. On MacOS,
-   *    a system "last accessed" default is used. May be null.
-   * @param initialFile - set initial file on some platforms. May be null.
+   * @param initialPath - sets initial directory and suggested filename. May be
+   *   null. For MacOS, only the filename is used, and the initial directory is
+   *   always chosen by the platform based on recent accesses. 
+   *   If the path is to an existing directory, or if getParentFile() is not
+   *   null, this is used for the initial directory (or some ancestor if that
+   *   directory isn't accessible). Otherwise, a platform-specific default is
+   *   used as the initial directory.
+   *   If the path is not to a directory, then getName() is used for the initial
+   *   filename. Otherwise, a platform-specific default or emptystring is used
+   *   as the initial filename.
    * @param filters - list of zero or more filters user can choose from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user.
    */
   public static File openFile(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters) {
+      File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_OPEN, parent, title,
-        toPath(initialDir), toPath(initialFile), filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     return toFile(dlg.fileResult);
   }
+  // initialPath - May be null. If it contains a separator, then the trailing
+  // part (if non-blank) is used as the suggested name, and the rest is used for
+  // the initial directory. Otherwise, the entire initialPath is used for the
+  // suggested name.
   public static String openFile(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters) {
+      String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_OPEN, parent, title,
-        initialDir, initialFile, filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     return dlg.fileResult;
   }
@@ -163,9 +176,9 @@ public class BetterFileDialog {
    * @return the list of one or more chosen files, or null if canceled by user.
    */
   public static File[] openFiles(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters) {
+      File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_MULTI, parent, title,
-        toPath(initialDir), toPath(initialFile), filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     int n = dlg.multiResult == null ? 0 : dlg.multiResult.length;
     if (n == 0)
@@ -179,9 +192,9 @@ public class BetterFileDialog {
     return ret;
   }
   public static String[] openFiles(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters) {
+      String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_MULTI, parent, title,
-        initialDir, initialFile, filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     int n = dlg.multiResult == null ? 0 : dlg.multiResult.length;
     if (n == 0)
@@ -199,9 +212,7 @@ public class BetterFileDialog {
    * @param parent - used for dialog positioning on Windows and Linux. May be
    *    null. On MacOS, the dialog is always centered on the screen.
    * @param title - title for the dialog, or null for system default title.
-   * @param initialDir - set initial directory for Windows and Linux. On MacOS,
-   *    a system "last accessed" default is used. May be null.
-   * @param initialFile - set initial file on some platforms. May be null.
+   * @param initialPath - same as for openFile().
    * @param filters - list of zero or more filters user can choosse from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user. The chosen
@@ -212,16 +223,16 @@ public class BetterFileDialog {
    * for this case, not the one chosen by the user.)
    */
   public static File saveFile(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters) {
+      File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_SAVE, parent, title,
-        toPath(initialDir), toPath(initialFile), filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     return toFile(dlg.fileResult);
   }
   public static String saveFile(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters) {
+      String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_SAVE, parent, title,
-        initialDir, initialFile, filters);
+        toDir(initialPath), toName(initialPath), filters);
     dlg.doModal();
     return dlg.fileResult;
   }
@@ -237,13 +248,13 @@ public class BetterFileDialog {
    */
   public static File pickDir(Component parent, String title, File initialDir) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_DIR, parent, title,
-        toPath(initialDir), null, null);
+        toDir(initialDir), null, null);
     dlg.doModal();
     return toFile(dlg.dirResult);
   }
   public static String pickDir(Component parent, String title, String initialDir) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_DIR, parent, title,
-        initialDir, null, null);
+        toDir(initialDir), null, null);
     dlg.doModal();
     return dlg.dirResult;
   }
@@ -260,7 +271,7 @@ public class BetterFileDialog {
   protected int mode;
   protected String title;
   protected String initialDir;
-  protected String initialFile;
+  protected String suggestedFileName;
   protected Filter[] filters;
 
   protected Component awtParent;
@@ -269,12 +280,12 @@ public class BetterFileDialog {
   protected CountDownLatch awtBlockerIsVisible;
 
   protected BetterFileDialog(int mode, Component parent, String title,
-      String initialDir, String initialFile, Filter[] filters) {
+      String initialDir, String suggestedFileName, Filter[] filters) {
     this.mode = mode;
     this.awtParent = parent;
     this.title = title;
     this.initialDir = initialDir;
-    this.initialFile = initialFile;
+    this.suggestedFileName = suggestedFileName;
     this.filters = filters;
     this.awtBlockerIsVisible = new CountDownLatch(1);
   }
@@ -493,14 +504,14 @@ public class BetterFileDialog {
       dialog.setFilterIndex(0);
     }
 
-    if (initialFile != null) {
+    if (suggestedFileName != null) {
       if (style == SWT.SAVE) {
-        dialog.setFileName(initialFile);
+        dialog.setFileName(suggestedFileName);
       } else {
         // File must exist, otherwise initialDir isn't obeyed properly.
-        File f = new File(initialDir, initialFile);
+        File f = new File(initialDir, suggestedFileName);
         if (f.exists())
-          dialog.setFileName(initialFile);
+          dialog.setFileName(suggestedFileName);
       }
     }
 
@@ -621,6 +632,40 @@ public class BetterFileDialog {
     return file == null ? null : file.getPath();
   }
 
+  private static String toDir(File path) {
+    if (path == null)
+      return null;
+    if (path.isDirectory())
+      return path.getPath();
+    File parent = path.getParentFile();
+    if (parent != null)
+      return parent.getPath();
+    return null;
+  }
+
+  private static String toName(File path) {
+    if (path == null)
+      return null;
+    if (!path.isDirectory())
+      return path.getName();
+    return null;
+  }
+
+  private static String toDir(String path) {
+    if (path == null)
+      return null;
+    if (path.endsWith(File.separator))
+      return path;
+    return toDir(new File(path));
+  }
+
+  private static String toName(String path) {
+    if (path == null)
+      return null;
+    if (path.endsWith(File.separator))
+      return null;
+    return toName(new File(path));
+  }
 
   // Some pre-defined filters, for convenience.
   public static final Filter ANY_FILTER = new Filter("All Files", "*");

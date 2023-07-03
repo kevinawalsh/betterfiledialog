@@ -29,7 +29,7 @@ class ShortExample {
   public static void click(Dialog parent) {
 
     String choice = BetterFileDialog.openFile(parent,
-        "Pick Your Best Pic", dir, null,
+        "Pick Your Best Pic", dir,
         BetterFileDialog.JPG_FILTER,
         BetterFileDialog.PNG_FILTER,
         BetterFileDialog.ANY_FILTER);

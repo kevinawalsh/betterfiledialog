@@ -77,7 +77,7 @@ See the API below for details. Here's a short but complete example using
    
         // Step 3: When you need a popup, call just one function
         String choice = BetterFileDialog.openFile(parent,
-            "Pick Your Best Pic", dir, null,
+            "Pick Your Best Pic", dir,
             BetterFileDialog.JPG_FILTER,
             BetterFileDialog.PNG_FILTER,
             BetterFileDialog.ANY_FILTER);
@@ -133,37 +133,46 @@ public class BetterFileDialog {
    * @param parent - used for dialog positioning on Windows and Linux. May be
    *    null. On MacOS, the dialog is always centered on the screen.
    * @param title - title for the dialog, or null for system default title.
-   * @param initialDir - set initial directory for Windows and Linux. On MacOS,
-   *    a system "last accessed" default is used. May be null.
-   * @param initialFile - set initial file on some platforms. May be null.
+   * @param initialPath - sets initial directory and suggested filename. May be
+   *   null. For MacOS, only the filename is used, and the initial directory is
+   *   always chosen by the platform based on recent accesses. 
+   *   If the path is to an existing directory, or if getParentFile() is not
+   *   null, this is used for the initial directory (or some ancestor if that
+   *   directory isn't accessible). Otherwise, a platform-specific default is
+   *   used as the initial directory.
+   *   If the path is not to a directory, then getName() is used for the initial
+   *   filename. Otherwise, a platform-specific default or emptystring is used
+   *   as the initial filename.
    * @param filters - list of zero or more filters user can choose from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user.
    */
   public static File openFile(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters);
+      File initialPath, Filter... filters);
 
+  // initialPath - May be null. If it contains a separator, then the trailing
+  // part (if non-blank) is used as the suggested name, and the rest is used for
+  // the initial directory. Otherwise, the entire initialPath is used for the
+  // suggested name.
   public static String openFile(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters);
+      String initialPath, Filter... filters);
 
   /**
    * Same as openFile(), but allows selecting multiple files.
    * @return the list of one or more chosen files, or null if canceled by user.
    */
   public static File[] openFiles(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters);
+      File initialPath, Filter... filters);
 
   public static String[] openFiles(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters);
+      String initialPath, Filter... filters);
 
   /**
    * Pop up an save-file dialog and return the selected file.
    * @param parent - used for dialog positioning on Windows and Linux. May be
    *    null. On MacOS, the dialog is always centered on the screen.
    * @param title - title for the dialog, or null for system default title.
-   * @param initialDir - set initial directory for Windows and Linux. On MacOS,
-   *    a system "last accessed" default is used. May be null.
-   * @param initialFile - set initial file on some platforms. May be null.
+   * @param initialPath - same as for openFile().
    * @param filters - list of zero or more filters user can choosse from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user. The chosen
@@ -174,10 +183,10 @@ public class BetterFileDialog {
    * for this case, not the one chosen by the user.)
    */
   public static File saveFile(Component parent, String title,
-      File initialDir, File initialFile, Filter... filters);
+      File initialPath, Filter... filters);
 
   public static String saveFile(Component parent, String title,
-      String initialDir, String initialFile, Filter... filters);
+      String initialPath, Filter... filters);
 
   /**
    * Pop up a select-directory dialog and return the selected directory.
@@ -281,20 +290,20 @@ public class BetterFileDialog {
 
 ## Really? Why not just use ... 
 
-* **Java's basic `java.awt.FileDialog`?** This works mostly okay on MacOS and Linux
+* **Java's Swing support for load/save dialogs, using `javax.swing.JFileChooser`?**
+  The UI looks terrible out of the box, far removed from platform-native
+  dialogs, and there is no keyboard navigation. Swing has not been meaningfully
+  improved in many years.
+
+* **Java's basic `java.awt.FileDialog`?** This looks better, especially on MacOS and Linux
   platforms, providing access to native load/save dialogs. But on Windows
   platforms, `java.awt.FileDialog` does not support filename filters
-  (`getFilenameFilter()`, `setFilenameFilter()`). All of them have
-  cross-platform inconsistencies. Additionally, in 2023, the AWT ecosystem
-  appears to have been essentially abandoned, so it is unlikely this approach
-  will be improved in future. This approach also doesn't support picking
-  directories on all platforms.
-
-* **Java's Swing support for load/save dialogs, using `javax.swing.JFileChooser`?**
-  This is is more flexible and complete on all three platforms, but provides a sub-par
-  interface far removed from the native load/save dialogs. Keyboard
-  shortcuts/auto-complete barely work, keyboard focus does not follow platform
-  conventions, etc. Swing has not been meaningfully improved in many years.
+  (`getFilenameFilter()`, `setFilenameFilter()`) at all, and on MacOS and Linux
+  it can't do choosable filename filters. The dialog positioning is weird on
+  Linux and Windows, you can't pick an initial directory on MacOS, and it
+  doesn't support picking directories on all platforms. Additionally, in 2023,
+  the AWT ecosystem appears to have been essentially abandoned, so it is
+  unlikely this approach will be improved in future either. 
 
 * **JNI access to the underlying platform?** I tried this. See
   [`xfiledialog`](https://github.com/kevinawalsh/xfiledialog) for my attempt on
@@ -318,8 +327,8 @@ public class BetterFileDialog {
 
 * On MacOS, messages are unavoidably printed to the console, such as:
 
-    2023-06-30 20:53:24.616 java[28668:221731] +[CATransaction synchronize] called within transaction
-    2023-06-30 20:53:40.284 java[28668:221731] *** Assertion failure in -[AWTWindow_Normal _changeJustMain], NSWindow.m:14356
+      2023-06-30 20:53:24.616 java[28668:221731] +[CATransaction synchronize] called within transaction
+      2023-06-30 20:53:40.284 java[28668:221731] *** Assertion failure in -[AWTWindow_Normal _changeJustMain], NSWindow.m:14356
 
 * On Linux, the popup dialogs are system-modal, rather than
   application-modal as most Linux modals would normally be.

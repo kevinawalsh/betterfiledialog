@@ -30,8 +30,10 @@ class Example extends JFrame
   private JButton bDir = new JButton("Pick Dir");
 
   private JTextField tTitle = new JTextField("Pick Something");
-  private JTextField tDir = new JTextField(new File(System.getProperty("user.home"), "Downloads").getPath());
-  private JTextField tFile = new JTextField("example.jpg");
+  private JTextField tPath = new JTextField(
+      new File(
+        new File(System.getProperty("user.home"), "Downloads"),
+        "example.jpg").getPath());
   private JCheckBox cPNG = new JCheckBox();
   private JCheckBox cJPG = new JCheckBox();
   private JCheckBox cTXT = new JCheckBox();
@@ -75,13 +77,9 @@ class Example extends JFrame
     JLabel lTXT = new JLabel("TXT");
     JLabel lANY = new JLabel("*.*");
 
-    JLabel lDir = new JLabel("Initial Directory:");
-    lDir.setPreferredSize(new Dimension(575, 30));
-    tDir.setPreferredSize(new Dimension(575, 30));
-
-    JLabel lFile = new JLabel("Initial File:");
-    lFile.setPreferredSize(new Dimension(575, 30));
-    tFile.setPreferredSize(new Dimension(575, 30));
+    JLabel lPath = new JLabel("Initial Path:");
+    lPath.setPreferredSize(new Dimension(575, 30));
+    tPath.setPreferredSize(new Dimension(575, 30));
 
     bOpenOne.setPreferredSize(new Dimension(125, 36));
     bOpenMulti.setPreferredSize(new Dimension(125, 36));
@@ -111,10 +109,8 @@ class Example extends JFrame
     addSpace(main, 40, 10);
     main.add(lANY);
     main.add(cANY);
-    main.add(lDir);
-    main.add(tDir);
-    main.add(lFile);
-    main.add(tFile);
+    main.add(lPath);
+    main.add(tPath);
     main.add(bOpenOne);
     main.add(bOpenMulti);
     main.add(bSave);
@@ -193,14 +189,11 @@ class Example extends JFrame
     tResults.setText("");
 
     String title = tTitle.getText();
-    String initialDir = tDir.getText();
-    String initialFile = tFile.getText();
+    String initialPath = tPath.getText();
     if (title.equalsIgnoreCase("null"))
       title = null;
-    if (initialDir.equalsIgnoreCase("null"))
-      initialDir = null;
-    if (initialFile.equalsIgnoreCase("null"))
-      initialFile = null;
+    if (initialPath.equalsIgnoreCase("null"))
+      initialPath = null;
 
     int n = 0;
     if (cPNG.isSelected()) n++;
@@ -227,16 +220,15 @@ class Example extends JFrame
     tResults.setText(ret);
 
     if (dType.getSelectedItem().equals("File")) {
-      File iD = toFile(initialDir);
-      File iF = toFile(initialFile);
+      File path = toFile(initialPath);
       if (mode.equals("open")) {
-        File f = BetterFileDialog.openFile(parent, title, iD, iF, filters);
+        File f = BetterFileDialog.openFile(parent, title, path, filters);
         ret += "open: " + f;
       } else if (mode.equals("save")) {
-        File f = BetterFileDialog.saveFile(parent, title, iD, iF, filters);
+        File f = BetterFileDialog.saveFile(parent, title, path, filters);
         ret += "save: " + f;
       } else if (mode.equals("multi")) {
-        File[] f = BetterFileDialog.openFiles(parent, title, iD, iF, filters);
+        File[] f = BetterFileDialog.openFiles(parent, title, path, filters);
         if (f == null)
           ret += "open multiple: (null)";
         else if (f.length == 0)
@@ -247,18 +239,18 @@ class Example extends JFrame
             ret += s + "\n";
         }
       } else if (mode.equals("dir")) {
-        File f = BetterFileDialog.pickDir(parent, title, iD);
+        File f = BetterFileDialog.pickDir(parent, title, path);
         ret += "dir: " + f + "\n";
       }
     } else { // dType is "String"
       if (mode.equals("open")) {
-        String f = BetterFileDialog.openFile(parent, title, initialDir, initialFile, filters);
+        String f = BetterFileDialog.openFile(parent, title, initialPath, filters);
         ret += "open: " + f;
       } else if (mode.equals("save")) {
-        String f = BetterFileDialog.saveFile(parent, title, initialDir, initialFile, filters);
+        String f = BetterFileDialog.saveFile(parent, title, initialPath, filters);
         ret += "save: " + f;
       } else if (mode.equals("multi")) {
-        String[] f = BetterFileDialog.openFiles(parent, title, initialDir, initialFile, filters);
+        String[] f = BetterFileDialog.openFiles(parent, title, initialPath, filters);
         if (f == null)
           ret += "open multiple: (null)";
         else if (f.length == 0)
@@ -269,7 +261,7 @@ class Example extends JFrame
             ret += s + "\n";
         }
       } else if (mode.equals("dir")) {
-        String f = BetterFileDialog.pickDir(parent, title, initialDir);
+        String f = BetterFileDialog.pickDir(parent, title, initialPath);
         ret += "dir: " + f + "\n";
       }
     }
