@@ -30,6 +30,7 @@ class ShortExample {
 
     String choice = BetterFileDialog.openFile(parent,
         "Pick Your Best Pic", dir,
+        new BetterFileDialog.Filter("Logisim Circuit", ".circ", ".circ.xml"),
         BetterFileDialog.JPG_FILTER,
         BetterFileDialog.PNG_FILTER,
         BetterFileDialog.ANY_FILTER);

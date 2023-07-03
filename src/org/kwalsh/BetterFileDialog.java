@@ -39,7 +39,7 @@ import org.eclipse.swt.widgets.Shell;
 
 public class BetterFileDialog {
 
-  public static final String version = "1.0.1";
+  public static final String version = "1.0.2";
 
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
@@ -669,7 +669,7 @@ public class BetterFileDialog {
 
   // Some pre-defined filters, for convenience.
   public static final Filter ANY_FILTER = new Filter("All Files", "*");
-  public static final Filter JPG_FILTER = new Filter("JPEG Images", "jpg", "jpeg");
+  public static final Filter JPG_FILTER = new Filter("JPEG Images", "jpg", "jpeg", "jpe", "jfi", "jfif", "jfi");
   public static final Filter PNG_FILTER = new Filter("PNG Images", "png");
   public static final Filter IMAGE_FILTER = new Filter("Images", "jpg", "jpeg", "png");
   public static final Filter TXT_FILTER = new Filter("Plain Text Files", "txt");
@@ -708,7 +708,9 @@ public class BetterFileDialog {
      * For extensions of 4 characters or less, matching is case-insensitive on
      * all platforms, regardless of whether the underlying system uses case
      * sensitive or case insenstive file names. For longer file extensions,
-     * case sensitivity depends on the platform.
+     * case sensitivity depends on the platform, but includes at least
+     * ORigINalCase, lower.case, UPPER.CASE, and Title.Case (where dots separate
+     * words). 
      */
     public Filter(String name, String... extension)
     {
@@ -749,6 +751,15 @@ public class BetterFileDialog {
         for (String ext : extensions) {
           if (ext.length() > 4) {
             p.add(ext); // mixed case
+            String lower = ext.toLowerCase();
+            if (!lower.equals(ext))
+              p.add(lower);
+            String upper = ext.toUpperCase();
+            if (!upper.equals(ext))
+              p.add(upper);
+            String title = titleCase(ext);
+            if (!title.equals(ext) && !title.equals(upper) && !title.equals(lower))
+              p.add(title);
           } else {
             // permute case
             char[] word = ext.toLowerCase().toCharArray();
@@ -764,6 +775,25 @@ public class BetterFileDialog {
         for (int i = 1; i < p.size(); i++)
           permutations += ";*." + p.get(i);
       }
+    }
+
+    private static String titleCase(String ext) {
+      char[] word = ext.toCharArray();
+      int n = word.length;
+      boolean sawWordBreak = true;
+      for (int i = 0; i < n; i++) {
+        char l = Character.toLowerCase(word[i]);
+        char u = Character.toUpperCase(word[i]);
+        if (l == u) {
+          sawWordBreak = true;
+        } else if (sawWordBreak) {
+          word[i] = u;
+          sawWordBreak = false;
+        } else {
+          word[i] = l;
+        }
+      }
+      return new String(word);
     }
 
     private static String casePermutation(char[] word, int bits) {
