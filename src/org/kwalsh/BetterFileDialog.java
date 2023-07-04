@@ -36,10 +36,17 @@ import org.eclipse.swt.widgets.Shell;
 // * On Linux, if the user enters a filename for save-file that does not match
 //   any filters, then the first filter's extension is added, rather than the
 //   currently-selected filter.
+//
+// * We warn on overwrite for save-file for all platforms, because this can't
+//   reliably be disabled on some platforms. On MacOS 10.15 and later, there can
+//   be some cases where two somewhat contradictory warnings will occur, one
+//   from the system, and one from BetterFileDialog after changing the name to
+//   add a proper extension (but usually, MacOS adds a reasonable extension
+//   already, so in the common case the user sees only the MacOS warning).
 
 public class BetterFileDialog {
 
-  public static final String version = "1.0.2";
+  public static final String version = "1.0.3";
 
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
@@ -216,11 +223,13 @@ public class BetterFileDialog {
    * @param filters - list of zero or more filters user can choosse from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user. The chosen
-   * file is then validated against the filter list and, if it does not match,
-   * then a default extension is added based on the filter chosen by the user.
-   * There is no check for existing files, and no warning if the chosen file
-   * already exists. (BUG: On (some) Linux platforms, the first fitler is used
-   * for this case, not the one chosen by the user.)
+   *    file is then validated against the filter list and, if it does not
+   *    match, then a default extension is added based on the filter chosen by
+   *    the user. (BUG: On (some) Linux platforms, the first fitler is used for
+   *    this case, not the one chosen by the user.) If the file exists but is
+   *    not writeable or is a directory, an error is shown. If the file exists
+   *    and is writable, the user is warned about overwriting the file with a
+   *    chance to cancel.
    */
   public static File saveFile(Component parent, String title,
       File initialPath, Filter... filters) {
@@ -261,6 +270,8 @@ public class BetterFileDialog {
 
   protected String dirResult;
   protected String fileResult;
+  protected String fileResultExtension; // for save, if needs new extension
+  protected boolean swtChecksOverwrite;
   protected String[] multiResult; // for multi
 
   protected static final int MODE_OPEN = 1;
@@ -518,6 +529,10 @@ public class BetterFileDialog {
     // We set SWT's overwrite-checking to false, so that we can add the default
     // extension, if needed, before doing any such checking.
     dialog.setOverwrite(false);
+    // On some platforms, like MacOS 10.15 and higher, setting
+    // overwrite-checking to false does not work, so SWT might still check for
+    // overwrites.
+    swtChecksOverwrite = dialog.getOverwrite();
 
     String ret = dialog.open();
 
@@ -551,7 +566,7 @@ public class BetterFileDialog {
       // still matches an acceptable filter.
       // If the user enters "foo", we change it to "foo.jpg"
       // because that's the default extension for the filter they chose.
-      if (!matchesFilter(ret, filters)) {
+      if (!matchesFilterExtension(ret, filters)) {
         // This happens only if there are some filters, and none of the filters
         // have wildcards, so we can be assured there is a default extension for
         // whichever filter was chosen by the user.
@@ -561,7 +576,7 @@ public class BetterFileDialog {
         if (idx < 0 || idx >= filters.length) // is this possible?
           idx = 0;
         String ext = filters[idx].getDefaultExtension();
-        ret += "." + ext;
+        fileResultExtension = ext;
       }
       fileResult = ret;
     } else if (mode == MODE_OPEN) {
@@ -573,16 +588,60 @@ public class BetterFileDialog {
 
   }
 
-  protected static boolean matchesFilter(String path, Filter[] filters) {
+  // This is designed for simple extensions that do not themselves contain dots.
+  // For multi-part extensions containing dots, like "tar.gz", this can
+  // sometimes give slightly odd results, suggesting "foo.tar.zip" be replaced
+  // with either "foo.tar.tar.gz" or "foo.tar.zip.tar.gz".
+  // This should be called on AWT/Swing Thread.
+  protected String ensureExtension(String path, String ext) {
+    if (path == null)
+      return null;
+    String dir, name;
+    int idx = path.lastIndexOf(File.separator);
+    if (idx < 0) {
+      dir = "";
+      name = path;
+    } else {
+      dir = path.substring(0, idx+1);
+      name = path.substring(idx+1);
+    }
+    idx = name.lastIndexOf(".");
+    if (idx <= 0) {
+      // If path is ".../foo", just change it to "foo.ext" without asking.
+      // If path is ".../.foo", just change it to ".foo.ext" without asking.
+      name += "." + ext;
+      return dir + name;
+    } else {
+      // If path is ".../foo.bar", ask if user prefers "foo.ext" or "foo.bar.ext".
+      String suggestA = name.substring(0, idx) + "." + ext;
+      String suggestB = name + "." + ext;
+      String title = "File Name Extension";
+      String msg = "Missing expected file name extension.";
+      Object[] options = { "Use " + suggestA, "Use " + suggestB, "Cancel" };
+      JOptionPane dlog = new JOptionPane(msg);
+      dlog.setMessageType(JOptionPane.QUESTION_MESSAGE);
+      dlog.setOptions(options);
+      dlog.createDialog(awtParent, title).setVisible(true);
+      Object result = dlog.getValue();
+      if (result == options[0])
+        return dir + suggestA;
+      else if (result == options[1])
+        return dir + suggestB;
+      else
+        return null; // cancel
+    }
+  }
+
+  protected static boolean matchesFilterExtension(String path, Filter[] filters) {
     if (filters == null || filters.length == 0)
       return true;
     for (Filter f : filters)
-      if (f.accept(path))
+      if (f.acceptExtension(path))
         return true;
     return false;
   }
 
-  // This must run on the AWT/Swing thread. This blocks until 
+  // This must run on the AWT/Swing thread. This blocks until result is ready.
   protected void openAWTBlocker() {
     awtBlocker = 
         (awtParent instanceof Frame) ? new JDialog((Frame)awtParent) :
@@ -622,14 +681,75 @@ public class BetterFileDialog {
 
     // By here, SWT thread must have finished and hid awtBlocker.
     awtBlocker.dispose();
+
+    // Check extension and overwrite after save dialogs
+    if (mode == MODE_SAVE && fileResult != null) {
+      // Change extension if needed
+      if (fileResultExtension != null) {
+        String replacement = ensureExtension(fileResult, fileResultExtension);
+        if (replacement == null) { // user canceled
+          fileResult = null;
+          return;
+        }
+        if (!replacement.equals(fileResult)) {
+          // name changed, re-confirm overwriting
+          fileResult = replacement;
+          swtChecksOverwrite = false;
+        }
+      }
+      // Sanity check: can't write to directory
+      File file = new File(fileResult);
+      if (file.isDirectory()) {
+        JOptionPane.showMessageDialog(awtParent,
+            "A directory named \"" + file.getName() + "\" already exists.",
+            "Error Saving File", JOptionPane.OK_OPTION);
+        fileResult = null;
+        return;
+      }
+      // Sanity check: can't write to protected file
+      if (file.exists() && !file.canWrite()) {
+        JOptionPane.showMessageDialog(awtParent,
+            "Permission denied: " + file.getName(),
+            "Error Saving File", JOptionPane.OK_OPTION);
+        fileResult = null;
+        return;
+      }
+      // Sanity check: warn on overwrite, if SWT hasn't already done so
+      if (file.exists() && !swtChecksOverwrite) {
+        int confirm = JOptionPane.showConfirmDialog(awtParent,
+            "A file named \"" + file.getName() + "\" exists. Overwrite it?",
+            "Confirm Overwrite",
+            JOptionPane.YES_NO_OPTION);
+        if (confirm != JOptionPane.YES_OPTION) {
+          fileResult = null;
+          return;
+        }
+      }
+    }
   }
+
+  // Check whether overwrite warning can be suppressed. Mac OS 10.15 and higher,
+  // for example, will always warn, regardless of attempts to disable it.
+  // private static boolean supportsOverwriteSuppression, checkedForOverwriteSuppression;
+  // private static Object lockForOverwriteCheck = new Object();
+  // public static boolean canSuppressOverwrite() {
+  //   synchronized (lockForOverwriteCheck) {
+  //     if (!checkedForOverwriteSuppression) {
+  //       checkedForOverwriteSuppression = true;
+  //       swtDisplay.syncExec(() -> {
+  //         Shell swtShell = new Shell(swtDisplay);
+  //         FileDialog dialog = new FileDialog(swtShell, SWT.SAVE);
+  //         dialog.setOverwrite(false);
+  //         supportsOverwriteSuppression = (dialog.getOverwrite() == false);
+  //         swtShell.dispose();
+  //       });
+  //     }
+  //     return supportsOverwriteSuppression;
+  //   }
+  // }
 
   private static File toFile(String path) {
     return path == null ? null : new File(path);
-  }
-
-  private static String toPath(File file) {
-    return file == null ? null : file.getPath();
   }
 
   private static String toDir(File path) {
@@ -858,17 +978,49 @@ public class BetterFileDialog {
     public boolean accept(File path) {
       if (path == null)
         return false;
-      if (path.isDirectory())
+      if (path.isDirectory() || wildcard)
         return true;
       String lname = path.getName().toLowerCase();
       for (String ext : extensions) {
-        if (ext.equals("*") || lname.endsWith("."+ext.toLowerCase()))
+        if (lname.endsWith("."+ext.toLowerCase()))
           return true;
       }
       return false;
     }
     public boolean accept(String path) {
       return accept(toFile(path));
+    }
+
+    /**
+     * Check if a given file name matches one of the allowed extensions.
+     * @param path - The file name or file path.
+     * @return true iff the name matches one fo the allowed extensions.
+     * NOTE: Anything before a File.separator is ignored, and the file name
+     * portion must be more than just a dot followed by the extension. For
+     * example, the name "/foo/a.tar.gz" matches "gz" extension because it
+     * ends with ".gz". It matches the "tar.gz" extension for the same
+     * reason, but "/foo/.tar.gz" does not, because this file name is just a
+     * dot followed by the "tar.gz" extension.
+     * Matching is case-insensitive for all file extensions, regardless of
+     * length.
+     */
+    public boolean acceptExtension(String path) {
+      if (path == null)
+        return false;
+      if (wildcard)
+        return true;
+      int idx = path.lastIndexOf(File.separator);
+      if (idx >= 0)
+        path = path.substring(idx+1);
+      String lname = path.toLowerCase();
+      if (lname.equals(""))
+          return false; // empty name can't possibly match an extension
+      String lnameSuffix = lname.substring(1); // don't match first char
+      for (String ext : extensions) {
+        if (lnameSuffix.endsWith("."+ext.toLowerCase()))
+          return true;
+      }
+      return false;
     }
 
   } // end of Filter

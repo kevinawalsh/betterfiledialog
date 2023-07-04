@@ -176,11 +176,13 @@ public class BetterFileDialog {
    * @param filters - list of zero or more filters user can choosse from. The
    *    first one is selected by default.
    * @return the user's chosen file, or null if canceled by user. The chosen
-   * file is then validated against the filter list and, if it does not match,
-   * then a default extension is added based on the filter chosen by the user.
-   * There is no check for existing files, and no warning if the chosen file
-   * already exists. (BUG: On (some) Linux platforms, the first fitler is used
-   * for this case, not the one chosen by the user.)
+   *    file is then validated against the filter list and, if it does not
+   *    match, then a default extension is added based on the filter chosen by
+   *    the user. (BUG: On (some) Linux platforms, the first fitler is used for
+   *    this case, not the one chosen by the user.) If the file exists but is
+   *    not writeable or is a directory, an error is shown. If the file exists
+   *    and is writable, the user is warned about overwriting the file with a
+   *    chance to cancel.
    */
   public static File saveFile(Component parent, String title,
       File initialPath, Filter... filters);
@@ -340,6 +342,12 @@ public class BetterFileDialog {
   any filters, then the first filter's extension is added, rather than the
   currently-selected filter.
 
+* We warn on overwrite for save-file for all platforms, because this can't
+  reliably be disabled on some platforms. On MacOS 10.15 and later, there can be
+  some cases where two somewhat contradictory warnings will occur, one from the
+  system, and one from BetterFileDialog after changing the name to add a proper
+  extension (but usually, MacOS adds a reasonable extension already, so in the
+  common case the user sees only the MacOS warning).
 
 ## Credits and License
 
