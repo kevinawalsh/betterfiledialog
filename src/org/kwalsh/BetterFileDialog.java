@@ -17,8 +17,10 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 import javax.swing.JDialog;
 import javax.swing.JOptionPane;
+import javax.swing.JFileChooser;
 
 // New strategy: Multi-process
 //
@@ -81,6 +83,14 @@ public class BetterFileDialog {
   // Application name, (unavoidably) shown in the SWT menubar.
   public static String appName = null;
 
+  // Application-specific error handler.
+  public static Consumer<String> errorHandler;
+
+  protected static void trace(int lvl, String msg) {
+    if (traceLevel >= lvl)
+      System.out.println("BetterFileDialog: " + msg);
+  }
+
   protected static boolean isMacOS;
   protected static boolean isLinux;
   protected static boolean isWindows;
@@ -93,8 +103,8 @@ public class BetterFileDialog {
     isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
   }
 
-  // FIXME: include swing-fallback flag here?
   private static boolean installed = false;
+  private static boolean fallback = false;
   private static Object lock = new Object();
   public static String install() {
     synchronized(lock) {
@@ -113,8 +123,7 @@ public class BetterFileDialog {
             BufferedReader r = new BufferedReader(isr)) {
           r.lines().forEachOrdered((line) -> {
             line = line.trim();
-            if (traceLevel > 4)
-              System.out.println("BetterFileDialog: checksum " + line);
+            trace(4, "checksum " + line);
             String[] parts = line.split("  ");
             if (parts.length == 2)
               checksums.put(parts[1], parts[0]);
@@ -130,7 +139,8 @@ public class BetterFileDialog {
           swt_jar = installJar("swt-linux.jar", checksums);
         peerClassPath = swt_jar + sep + bfd_jar;
         return null;
-      } catch (Exception e) {
+      } catch (Throwable e) {
+        fallback = true;
         e.printStackTrace();
         return e.getMessage();
       }
@@ -158,26 +168,23 @@ public class BetterFileDialog {
     // String[] paths = System.getProperty("java.class.path").split(File.pathSeparator);
     // for (String path: paths) {
     //   if (new File(path).getName().toLowerCase().equals(jarname.toLowerCase())) {
-    //     if (traceLevel > 0)
-    //       System.out.println("BetterFileDialog: Found platform-specific library: " + path);
+    //     trace(1, "Found platform-specific library: " + path);
     //     return path;
     //   }
     // }
 
     String checksum = checksums.get("bfd-swt-peer/"+jarname);
     if (checksum == null)
-      throw new Exception("BetterFileDialog: Missing checksum for platform-specific library: " + jarname);
+      throw new Exception("Missing checksum for platform-specific library: " + jarname);
 
     // Second, check ~/.swt/checksum/jarname, extract if not found
     File swtdir = new File(System.getProperty("user.home"), ".swt");
     File destdir = new File(swtdir, checksum);
     File dest = new File(destdir, jarname);
     if (dest.exists()) {
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Loading platform-specific library: " + dest.getPath());
+      trace(1, "Loading platform-specific library: " + dest.getPath());
     } else {
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Installing platform-specific library: " + dest.getPath());
+      trace(1, "Installing platform-specific library: " + dest.getPath());
       // Create the ~/.swt directory and ~/.swt/checksum/ directory if needed
       // but don't try to create ~ or anything above it.
       ensureDir(swtdir);
@@ -362,21 +369,24 @@ public class BetterFileDialog {
       Dimension d = awtParent.getSize();
       loc.x += d.width/2;
       loc.y += d.height/2;
-      if (traceLevel > 2)
-        System.out.println("BetterFileDialog: Centering over parent at " + loc);
+      trace(3, "Centering over parent at " + loc);
     }
   }
 
   protected void exec() {
-    // SWT half
-    new Thread(() -> execSWTPeer()).start();
-
-    // AWT half
-    if (EventQueue.isDispatchThread()) {
-      openAWTBlocker();
+    if (fallback) {
+      doSwingDialogFallback();
     } else {
-      try { EventQueue.invokeAndWait(() -> openAWTBlocker()); }
-      catch (Exception e) { e.printStackTrace(); }
+      // SWT half
+      new Thread(() -> execSWTPeer()).start();
+
+      // AWT half
+      if (EventQueue.isDispatchThread()) {
+        openAWTBlocker();
+      } else {
+        try { EventQueue.invokeAndWait(() -> openAWTBlocker()); }
+        catch (Exception e) { e.printStackTrace(); }
+      }
     }
   }
 
@@ -406,43 +416,40 @@ public class BetterFileDialog {
     }
 
     // Process results from peer.
-    if (peerCanceled) {
+    if (peerError != null) {
+      trace(1, "Failed due to " + peerError);
+    } else if (peerCanceled) {
       // do nothing
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Canceled by user");
-    } else if (peerError != null) {
-      // FIXME: fall back to Swing dialogs here?
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Failed due to " + peerError);
+      trace(1, "Canceled by user");
     } else if (peerCountLeft != 0) {
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Missing " + peerCountLeft +
+      trace(1, "Missing " + peerCountLeft +
             " of " + peerResults.length + " results");
+      peerError = "Missing " + peerCountLeft + " of " + peerResults.length + " results from peer.";
     } else if (peerResults.length == 0) {
-      if (traceLevel > 0)
-        System.out.println("BetterFileDialog: Empty results.");
+      trace(1, "Empty results.");
+      peerError = "Empty results from peer.";
     } else if (mode == MODE_OPEN || mode == MODE_SAVE) {
       if (peerResults.length != 1) {
-        if (traceLevel > 0)
-          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+        trace(1, "Wanted 1 result but got " + peerResults.length);
+        peerError = "Multiple results from peer.";
       } else {
         fileResult = peerResults[0];
       }
     } else if (mode == MODE_MULTI) {
       if (peerResults.length != 1) {
-        if (traceLevel > 0)
-          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+        trace(1, "Wanted 1 result but got " + peerResults.length);
+        peerError = "Multiple results from peer.";
       } else if (peerResultDir == null) {
-        if (traceLevel > 0)
-          System.out.println("BetterFileDialog: Missing result directory");
+        trace(1, "Missing result directory");
+        peerError = "Missing result directory from peer.";
       } else {
-        multiResult = peerResults;
         dirResult = peerResultDir;
+        multiResult = peerResults;
       }
     } else if (mode == MODE_DIR) {
       if (peerResults.length != 1) {
-        if (traceLevel > 0)
-          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+        trace(1, "Wanted 1 result but got " + peerResults.length);
+        peerError = "Multiple results from peer.";
       } else {
         dirResult = peerResults[0];
       }
@@ -450,7 +457,7 @@ public class BetterFileDialog {
 
     // Ensure awtBlocker is visible...
     try { awtBlockerIsVisible.await(); }
-    catch (Exception e) { e.printStackTrace(); }
+    catch (Exception e) { e.printStackTrace(); } // what to do here?
 
     // ... then hide it to notify AWT/Swing thread that result is ready.
     EventQueue.invokeLater(() -> {
@@ -471,9 +478,9 @@ public class BetterFileDialog {
 
     String err = install();
     if (err != null)
-      throw new Exception("SWT Installation attempted and failed");
+      throw new Exception("installation failed: " + err);
     if (javaExePath == null || peerClassPath == null)
-      throw new Exception("SWT Installation already attempted and failed");
+      throw new Exception("BetterFileDialog installation still failed");
 
     ArrayList<String> cmd = new ArrayList<>();
     cmd.add(javaExePath);
@@ -502,15 +509,14 @@ public class BetterFileDialog {
         cmd.add(f.encodeForPeer());
       }
     }
-    if (traceLevel > 0) {
+    if (traceLevel != 0) {
       cmd.add("--debug");
       cmd.add("" + traceLevel);
     }
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
     pb.redirectErrorStream(true);
-    if (traceLevel > 1)
-      System.out.println("BetterFileDialog: " + String.join(" ", cmd));
+    trace(2, "Peer: " + String.join(" ", cmd));
 
     peer = pb.start();
   }
@@ -522,8 +528,7 @@ public class BetterFileDialog {
         BufferedReader r = new BufferedReader(isr)) {
       while (true) {
         String line = r.readLine();
-        if (traceLevel > 1)
-          System.out.println("BetterFileDialog: > " + line);
+        trace(2, "Peer > " + line);
         if (line.startsWith("EXIT")) {
           break;
         } else if (line.startsWith("STATUS: checked overwrite")) {
@@ -660,52 +665,153 @@ public class BetterFileDialog {
     // By here, background thread must have finished and hid awtBlocker.
     awtBlocker.dispose();
 
+    if (peerError != null && errorHandler != null) {
+      try { errorHandler.accept(peerError); }
+      catch (Exception e) { e.printStackTrace(); }
+    }
+
+    if (peerError != null) {
+      fallback = true;
+      doSwingDialogFallback();
+      return;
+    }
+
     // Check extension and overwrite after save dialogs
-    if (mode == MODE_SAVE && fileResult != null) {
+    if (mode == MODE_SAVE && fileResult != null)
+      checkOverwrite();
+  }
+  
+  // This must run on the AWT/Swing thread.
+  protected void checkOverwrite() {
 
-
-      // Change extension if needed
-      if (peerSuggestsExtension != null) {
-        String replacement = ensureExtension(fileResult, peerSuggestsExtension);
-        if (replacement == null) { // user canceled
-          fileResult = null;
-          return;
-        }
-        if (!replacement.equals(fileResult)) {
-          // name changed, re-confirm overwriting
-          fileResult = replacement;
-          peerCheckedOverwrite = false;
-        }
-      }
-      // Sanity check: can't write to directory
-      File file = new File(fileResult);
-      if (file.isDirectory()) {
-        JOptionPane.showMessageDialog(awtParent,
-            "A directory named \"" + file.getName() + "\" already exists.",
-            "Error Saving File", JOptionPane.OK_OPTION);
+    // Change extension if needed
+    if (peerSuggestsExtension != null) {
+      String replacement = ensureExtension(fileResult, peerSuggestsExtension);
+      if (replacement == null) { // user canceled
         fileResult = null;
         return;
       }
-      // Sanity check: can't write to protected file
-      if (file.exists() && !file.canWrite()) {
-        JOptionPane.showMessageDialog(awtParent,
-            "Permission denied: " + file.getName(),
-            "Error Saving File", JOptionPane.OK_OPTION);
-        fileResult = null;
-        return;
-      }
-      // Sanity check: warn on overwrite, if SWT hasn't already done so
-      if (file.exists() && !peerCheckedOverwrite) {
-        int confirm = JOptionPane.showConfirmDialog(awtParent,
-            "A file named \"" + file.getName() + "\" exists. Overwrite it?",
-            "Confirm Overwrite",
-            JOptionPane.YES_NO_OPTION);
-        if (confirm != JOptionPane.YES_OPTION) {
-          fileResult = null;
-          return;
-        }
+      if (!replacement.equals(fileResult)) {
+        // name changed, re-confirm overwriting
+        fileResult = replacement;
+        peerCheckedOverwrite = false;
       }
     }
+
+    // Sanity check: can't write to directory
+    File file = new File(fileResult);
+    if (file.isDirectory()) {
+      JOptionPane.showMessageDialog(awtParent,
+          "A directory named \"" + file.getName() + "\" already exists.",
+          "Error Saving File", JOptionPane.OK_OPTION);
+      fileResult = null;
+      return;
+    }
+
+    // Sanity check: can't write to protected file
+    if (file.exists() && !file.canWrite()) {
+      JOptionPane.showMessageDialog(awtParent,
+          "Permission denied: " + file.getName(),
+          "Error Saving File", JOptionPane.OK_OPTION);
+      fileResult = null;
+      return;
+    }
+
+    // Sanity check: warn on overwrite, if SWT hasn't already done so
+    if (file.exists() && !peerCheckedOverwrite) {
+      int confirm = JOptionPane.showConfirmDialog(awtParent,
+          "A file named \"" + file.getName() + "\" exists. Overwrite it?",
+          "Confirm Overwrite",
+          JOptionPane.YES_NO_OPTION);
+      if (confirm != JOptionPane.YES_OPTION) {
+        fileResult = null;
+        return;
+      }
+    }
+
+  }
+  
+  static File toDir(File path) {
+    return path.isDirectory() ? path : path.getParentFile();
+  }
+  
+  static File toFilePath(String path) {
+    if (path.endsWith(File.separator))
+      return null;
+    File f = new File(path);
+    return f.isDirectory() ? null : f;
+  }
+
+  // This must run on the AWT/Swing thread.
+  protected void doSwingDialogFallback() {
+    peerCheckedOverwrite = false;
+    if (mode == MODE_OPEN || mode == MODE_SAVE || mode == MODE_MULTI) {
+      JFileChooser fc = new JFileChooser();
+      if (this.title != null)
+        fc.setDialogTitle(title);
+      if (initialPath != null) {
+        File path = new File(initialPath);
+        File dir = toDir(path);
+        File file = toFilePath(initialPath);
+        if (dir != null)
+          fc.setCurrentDirectory(dir);
+        if (file != null)
+          fc.setSelectedFile(file);
+      }
+      if (filters != null && filters.length > 0) {
+        for (Filter f : filters)
+          fc.addChoosableFileFilter(f);
+        fc.setFileFilter(filters[0]);
+      }
+      if (mode == MODE_MULTI)
+        fc.setMultiSelectionEnabled(true);
+      int ret;
+      if (mode == MODE_SAVE)
+        ret = fc.showSaveDialog(awtParent);
+      else
+        ret = fc.showOpenDialog(awtParent);
+      if (ret == JFileChooser.APPROVE_OPTION) {
+        if (mode == MODE_MULTI) {
+          dirResult = fc.getCurrentDirectory().getPath();
+          File[] files = fc.getSelectedFiles();
+          multiResult = new String[files.length];
+          for (int i = 0; i < files.length; i++)
+            multiResult[i] = files[i].getPath();
+        } else {
+          fileResult = fc.getSelectedFile().getPath();
+          if (mode == MODE_SAVE && filters != null && filters.length > 0) {
+            Filter usedFilter = filters[0];
+            javax.swing.filechooser.FileFilter chosenFilter = fc.getFileFilter();
+            if (chosenFilter instanceof Filter)
+              usedFilter = (Filter)chosenFilter;
+            peerSuggestsExtension = usedFilter.getDefaultExtension();
+          } 
+        }
+      }
+    } else if (mode == MODE_DIR) {
+      JFileChooser fc = new JFileChooser();
+      if (this.title != null)
+        fc.setDialogTitle(title);
+      if (initialPath != null) {
+        File path = new File(initialPath);
+        File dir = toDir(path);
+        if (dir != null) {
+          File parent = dir.getParentFile();
+          if (parent != null)
+            fc.setCurrentDirectory(parent);
+          fc.setSelectedFile(dir);
+        }
+      }
+      fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+      int ret = fc.showOpenDialog(awtParent);
+      if (ret == JFileChooser.APPROVE_OPTION) {
+        dirResult = fc.getSelectedFile().getPath();
+      }
+    }
+
+    // Check extension and overwrite after save dialogs
+    if (mode == MODE_SAVE && fileResult != null)
+      checkOverwrite();
   }
 
   private static String toString(File path) {

@@ -59,14 +59,12 @@ public class BetterFileDialogPeer {
     if (mode < 0)
       die("missing prompt argument");
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Executing");
+    trace(1, "Executing");
 
     try { run(); }
     catch (Throwable e) { die(e); }
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Exiting");
+    trace(1, "Exiting");
 
     System.out.println("EXIT");
     System.exit(0);
@@ -143,35 +141,29 @@ public class BetterFileDialogPeer {
    
     long pid = ProcessHandle.current().pid();
 
-    if (traceLevel > 1)
-      System.out.println("BetterFileDialog: Running as process " + pid +" on" +
-          (isMacOS ? " MacOS" : "") +
-          (isLinux ? " Linux" : "") +
-          (isWindows ? " Windows" : ""));
+    trace(2, "Running as process " + pid +" on" +
+        (isMacOS ? " MacOS" : "") +
+        (isLinux ? " Linux" : "") +
+        (isWindows ? " Windows" : ""));
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Checking jvm options");
+    trace(1, "Checking jvm options");
     String env = System.getenv("JAVA_STARTED_ON_FIRST_THREAD_" + pid);
     if (isMacOS && !"1".equals(env)) {
-      System.err.println("BetterFileDialog: Critical error, JVM on MacOS must" +
+      System.out.println("ERROR: JVM on MacOS must" +
           "be executed with the -XstartOnFirstThread command-line option.\n");
-      System.out.println("STATUS: wrong thread");
-      die("Wrong thread");
+      die("Bad JVM configuration");
     }
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Preparing SWT display");
+    trace(1, "Preparing SWT display");
     Display.setAppName(appName);
     swtDisplay = new Display();
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Scheduling continuation");
+    trace(1, "Scheduling continuation");
     Thread.currentThread().setName("Main Thread");
     swtDisplay.asyncExec(() -> {
       try {
         Thread.currentThread().setName("SWT Event Thread");
-        if (traceLevel > 0)
-          System.out.println("BetterFileDialog: Executing continuation");
+        trace(1, "Executing continuation");
 
         process();
 
@@ -181,29 +173,25 @@ public class BetterFileDialogPeer {
       }
     });
 
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Starting event loop");
+    trace(1, "Starting event loop");
     while (!swtDisplay.isDisposed())
     {
       if (!swtDisplay.readAndDispatch())
         swtDisplay.sleep();
     }
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Event loop terminated");
+    trace(1, "Event loop terminated");
   }
 
   static void process() throws Exception {
     swtShell = new Shell(swtDisplay, SWT.ON_TOP);
 
     if (xloc >= 0 && yloc >= 0) {
-      if (traceLevel > 2)
-        System.out.println("BetterFileDialog: Positioning at ("+xloc+","+yloc+")");
+      trace(3, "Positioning at ("+xloc+","+yloc+")");
     } else {
       Rectangle b = swtDisplay.getPrimaryMonitor().getBounds();
       xloc = b.x + b.width/2;
       yloc = b.y + b.height/2;
-      if (traceLevel > 2)
-        System.out.println("BetterFileDialog: Centering on screen at ("+xloc+","+yloc+")");
+      trace(3, "Centering on screen at ("+xloc+","+yloc+")");
     }
 
     if (isWindows) {
@@ -262,10 +250,8 @@ public class BetterFileDialogPeer {
 
     String ret = dialog.open();
 
-    if (traceLevel > 0) {
-      System.out.println("BetterFileDialog: Result=" + ret);
-      System.out.println("BetterFileDialog: FilterPath=" + dialog.getFilterPath());
-    }
+    trace(1, "Result=" + ret);
+    trace(1, "FilterPath=" + dialog.getFilterPath());
 
     System.out.println("RESULT: " + ret);
   }
@@ -324,17 +310,17 @@ public class BetterFileDialogPeer {
     String ret = dialog.open();
 
     if (traceLevel > 0) {
-      System.out.println("BetterFileDialog: Result=" + ret);
-      System.out.println("BetterFileDialog: FilterPath=" + dialog.getFilterPath());
-      System.out.println("BetterFileDialog: FileName=" + dialog.getFileName());
+      trace(1, "Result=" + ret);
+      trace(1, "FilterPath=" + dialog.getFilterPath());
+      trace(1, "FileName=" + dialog.getFileName());
       String[] a = dialog.getFileNames();
       if (a == null) {
-        System.out.println("BetterFileDialog: FileNames=(null)");
+        trace(1, "FileNames=(null)");
       } else if (a.length == 0) {
-        System.out.println("BetterFileDialog: FileNames=(empty array)");
+        trace(1, "FileNames=(empty array)");
       } else {
         for (int i = 0; i < a.length; i++)
-        System.out.println("BetterFileDialog: FileNames["+i+"]="+a[i]);
+        trace(1, "FileNames["+i+"]="+a[i]);
       }
     }
     
@@ -424,6 +410,11 @@ public class BetterFileDialogPeer {
     if (path.endsWith(File.separator))
       return null;
     return toName(new File(path));
+  }
+
+  protected static void trace(int lvl, String msg) {
+    if (traceLevel >= lvl)
+      System.out.println("* " + msg);
   }
 
 
