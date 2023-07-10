@@ -21,14 +21,15 @@ jar:
 	mkdir -p ./bfd-swt-peer
 	rm -f manifest.md
 	echo "Name: BetterFileDialogPeer" >> manifest.md
-	echo "Main-Class: org.kwalsh.BetterFileDialogPeer" >> manifest.md
 	echo "Implementation-Build-Date: $(DATE)" >> manifest.md
 	echo "Implementation-Version: $(VERSION)" >> manifest.md
 	echo "Implementation-Vendor: Kevin Walsh" >> manifest.md
 	echo "Built-By: $(USER)" >> manifest.md
 	jar cfm bfd-swt-peer/bfd-peer.jar manifest.md org/kwalsh/*.class
+	# Stage 2: Collect and checksums classes needed for peer.
 	cp swt-linux.jar swt-macos.jar swt-windows.jar ./bfd-swt-peer/
-	# Stage 2: Make client jar
+	sha256sum bfd-swt-peer/*.jar > ./bfd-swt-peer/sha256.txt
+	# Stage 3: Make client jar
 	rm -f manifest.md
 	echo "Name: BetterFileDialog" >> manifest.md
 	echo "Implementation-Build-Date: $(DATE)" >> manifest.md
@@ -41,9 +42,9 @@ jar:
 demo:
 	javac -d . -cp betterfiledialog.jar ./src/demo/*.java
 	@echo "Now try:"
-	@echo "   java -cp etterfiledialog.jar:. ShortExample"
+	@echo "   java -cp betterfiledialog.jar:. ShortExample"
 	@echo "Or:"
-	@echo "   java -cp etterfiledialog.jar:. Example"
+	@echo "   java -cp betterfiledialog.jar:. Example"
 
 .PHONY: clean
 clean:

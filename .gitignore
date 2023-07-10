@@ -3,3 +3,4 @@
 manifest.md
 ./org
 !src/org/
+bfd-swt-peer

@@ -7,11 +7,9 @@ import java.awt.event.*;
 
 class ShortExample {
 
-
   static String dir = System.getProperty("user.home");
 
   public static void main(String[] args) {
-    BetterFileDialog.traceLevel = 5;
     if (args.length > 0)
       dir = args[0];
     Dialog dlg = new Dialog((Frame)null, "Demo", true);

@@ -12,7 +12,10 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
 import javax.swing.JDialog;
 import javax.swing.JOptionPane;
@@ -75,9 +78,14 @@ public class BetterFileDialog {
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
 
-  static boolean isMacOS;
-  static boolean isLinux;
-  static boolean isWindows;
+  // Application name, (unavoidably) shown in the SWT menubar.
+  public static String appName = null;
+
+  protected static boolean isMacOS;
+  protected static boolean isLinux;
+  protected static boolean isWindows;
+  protected static String peerClassPath;
+  protected static String javaExePath;
 
   static {
     isMacOS = System.getProperty("os.name").toLowerCase().startsWith("mac");
@@ -85,8 +93,110 @@ public class BetterFileDialog {
     isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
   }
 
-  // Application name, (unavoidably) shown in the SWT menubar.
-  public static String appName = null;
+  // FIXME: include swing-fallback flag here?
+  private static boolean installed = false;
+  private static Object lock = new Object();
+  public static String install() {
+    synchronized(lock) {
+      if (installed)
+        return null;
+      installed = true;
+      try {
+        String sep = System.getProperty("path.separator");
+        javaExePath = ProcessHandle.current().info().command().orElse("java");
+
+        // Get checksums for jars
+        HashMap<String, String> checksums = new HashMap<>();
+        String rsrc = "/bfd-swt-peer/sha256.txt";
+        try (InputStream is = BetterFileDialog.class.getResourceAsStream(rsrc);
+            Reader isr = new InputStreamReader(is);
+            BufferedReader r = new BufferedReader(isr)) {
+          r.lines().forEachOrdered((line) -> {
+            line = line.trim();
+            if (traceLevel > 4)
+              System.out.println("BetterFileDialog: checksum " + line);
+            String[] parts = line.split("  ");
+            if (parts.length == 2)
+              checksums.put(parts[1], parts[0]);
+          });
+        }
+        String bfd_jar = installJar("bfd-peer.jar", checksums);
+        String swt_jar;
+        if (isMacOS)
+          swt_jar = installJar("swt-macos.jar", checksums);
+        else if (isWindows)
+          swt_jar = installJar("swt-windows.jar", checksums);
+        else // linux
+          swt_jar = installJar("swt-linux.jar", checksums);
+        peerClassPath = swt_jar + sep + bfd_jar;
+        return null;
+      } catch (Exception e) {
+        e.printStackTrace();
+        return e.getMessage();
+      }
+    }
+  }
+
+  protected static void ensureDir(File dir) throws Exception {
+    if (!dir.exists()) {
+      try {
+        dir.mkdir();
+      } catch (Exception e) {
+        e.printStackTrace();
+        throw new Exception("Can't create ~/.swt directory: " + e.toString());
+      }
+      if (!dir.exists())
+        throw new Exception("Can't create ~/.swt directory: mkdir failed");
+    }
+    if (!dir.isDirectory()) {
+      throw new Exception("Can't create ~/.swt directory: path exists but is not a directory. Perhaps delete it and try again.");
+    }
+  }
+
+  protected static String installJar(String jarname, HashMap<String, String> checksums) throws Exception {
+    // First, see if jar is already on classpath
+    // String[] paths = System.getProperty("java.class.path").split(File.pathSeparator);
+    // for (String path: paths) {
+    //   if (new File(path).getName().toLowerCase().equals(jarname.toLowerCase())) {
+    //     if (traceLevel > 0)
+    //       System.out.println("BetterFileDialog: Found platform-specific library: " + path);
+    //     return path;
+    //   }
+    // }
+
+    String checksum = checksums.get("bfd-swt-peer/"+jarname);
+    if (checksum == null)
+      throw new Exception("BetterFileDialog: Missing checksum for platform-specific library: " + jarname);
+
+    // Second, check ~/.swt/checksum/jarname, extract if not found
+    File swtdir = new File(System.getProperty("user.home"), ".swt");
+    File destdir = new File(swtdir, checksum);
+    File dest = new File(destdir, jarname);
+    if (dest.exists()) {
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Loading platform-specific library: " + dest.getPath());
+    } else {
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Installing platform-specific library: " + dest.getPath());
+      // Create the ~/.swt directory and ~/.swt/checksum/ directory if needed
+      // but don't try to create ~ or anything above it.
+      ensureDir(swtdir);
+      ensureDir(destdir);
+      // Extract the library to ~/.swt/checksum/
+      String rsrc = "/bfd-swt-peer/" + jarname;
+      try (InputStream inputStream = BetterFileDialog.class.getResourceAsStream(rsrc)) {
+        if (inputStream == null) {
+          throw new Exception("Required platform-specific library missing: " + rsrc);
+        }
+        Files.copy(inputStream, dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+      } catch (Throwable e) {
+        e.printStackTrace();
+        throw new Exception("Can't install platform-specific library to " + dest.getPath() + "\n" + e.toString());
+      }
+    }
+
+    return dest.getPath();
+  }
 
   /**
    * Pop up an open-file dialog and return the selected file.
@@ -301,7 +411,7 @@ public class BetterFileDialog {
       if (traceLevel > 0)
         System.out.println("BetterFileDialog: Canceled by user");
     } else if (peerError != null) {
-      // FIXME: fall back to Swing dialogs?
+      // FIXME: fall back to Swing dialogs here?
       if (traceLevel > 0)
         System.out.println("BetterFileDialog: Failed due to " + peerError);
     } else if (peerCountLeft != 0) {
@@ -358,15 +468,19 @@ public class BetterFileDialog {
 
   // This must be called from background thread.
   protected void openSWTPeer() throws Exception {
-    String java_exe = ProcessHandle.current().info().command().orElse("java");
-    String classpath = System.getProperty("java.class.path");
+
+    String err = install();
+    if (err != null)
+      throw new Exception("SWT Installation attempted and failed");
+    if (javaExePath == null || peerClassPath == null)
+      throw new Exception("SWT Installation already attempted and failed");
 
     ArrayList<String> cmd = new ArrayList<>();
-    cmd.add(java_exe);
+    cmd.add(javaExePath);
     if (isMacOS)
       cmd.add("-XstartOnFirstThread");
     cmd.add("-cp");
-    cmd.add(classpath);
+    cmd.add(peerClassPath);
     cmd.add("org.kwalsh.BetterFileDialogPeer");
     if (appName != null) {
       cmd.add("--appname");
