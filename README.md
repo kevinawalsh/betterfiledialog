@@ -22,20 +22,21 @@ All of these use platform-native dialogs on Linux, MacOS, and Windows, and all
 supporting platform-native keyboard navigation and shortcuts, platform-native
 drag-and-drop, and platform-native icons, fonts, and styling.
 
+There are limitations. The dialogs are "system-modal", rather than
+"application-modal". This is annoying, but is difficult to work around due to
+limitations in SWT, in Java, and in integrating AWT/Swing in the same process as
+SWT. As of version 2.0.0, the SWT code and dialogs are run in a separate,
+dedicated java process.
+
 ## Usage
 
 To use `BetterFileDialog` in your AWT or Swing based java application:
 
-1. Import `org.kwalsh.BetterFileDialog` in your code.
+1. Import `org.kwalsh.BetterFileDialog` in your code. If you like, set
+   `BetterFileDialog.appName` to get a customized menubar title, or
+   `BetterFileDialog.traceLevel` to enable debugging output.
 
-2. In your `main()` function, call `BetterFileDialog.init(a, b, c)` early in
-   your program, before doing any AWT or Swing code. The `init()` function does
-   not return. Instead, it takes three (optional) `Runnable` parameters. The
-   first, `a`, will be executed asynchronously on the AWT/Swing even thread. The
-   second, `b`, will be executed on the SWT event thread. The third, `c`, will
-   be executed on a newly created thread. 
-
-3. Call `BetterFileDialog.openFile()`, `BetterFileDialog.openFiles()`,
+2. Call `BetterFileDialog.openFile()`, `BetterFileDialog.openFiles()`,
    `BetterFileDialog.saveFile()`, or `BetterFileDialog.pickDirectory()` whenever
    you like, from either the AWT/Swing event thread, or from some other
    unrelated thread. You can pass in parameters to customize the dialog's
@@ -47,23 +48,22 @@ See the API below for details. Here's a short but complete example using
 
 ```java
     // Step 1:  Import the class
-    import org.kwalsh.BetterFileDialog; 
+    import org.kwalsh.BetterFileDialog;
+
     import java.awt.*;
+    import java.awt.event.*;
     
     class ShortExample {
     
       static String dir = System.getProperty("user.home");
-      
+    
       public static void main(String[] args) {
         if (args.length > 0)
           dir = args[0];
-    
-        // Step 2: Initialize it, early in your main function
-        BetterFileDialog.init(() -> demo(), null, null);  
-      }
-    
-      public static void demo() {
-        final Dialog dlg = new Dialog((Frame)null, "Demo", true);
+        Dialog dlg = new Dialog((Frame)null, "Demo", true);
+        dlg.addWindowListener(new WindowAdapter() {
+          public void windowClosing(WindowEvent e) { dlg.dispose(); }
+        });
         dlg.setLayout(null);
         dlg.setSize(300, 300);
         Button b = new Button("Click Me");
@@ -74,38 +74,36 @@ See the API below for details. Here's a short but complete example using
       }
     
       public static void click(Dialog parent) {
-   
-        // Step 3: When you need a popup, call just one function
+
+        // Step 2: When you need a popup, call just one function
         String choice = BetterFileDialog.openFile(parent,
             "Pick Your Best Pic", dir,
+            new BetterFileDialog.Filter("Tarballs", ".tar", ".tar.gz", ".tgz"),
             BetterFileDialog.JPG_FILTER,
             BetterFileDialog.PNG_FILTER,
             BetterFileDialog.ANY_FILTER);
-
         if (choice == null)
           System.out.println("Cancelled, goodbye!");
         else
           System.out.println("You picked: " + choice);
       }
+    
     }
 ```
 
 ## Requirements, Compiling and Running Client Applications
 
-To compile and run your application:
-
-1. Put `betterfiledialog.jar` and one of the three SWT files (`swt-linux.jar`,
-   `swt-macos.jar`, or `swt-windows.jar`) in your `CLASSPATH`.
-
-2. On MacOS, add `-XstartOnMainThread` as a JVM option when starting your app.
+To compile and run your application, put `betterfiledialog.jar` and one of the
+three SWT files (`swt-linux.jar`, `swt-macos.jar`, or `swt-windows.jar`) in your
+`CLASSPATH`.
 
 `BetterFileDialog` was designed for Java 17, though it likely works on later
 versions and could likely be compiled for earlier versions. It uses Eclipse SWT
 under the cover.
 
-To compile `BetterFileDialog` itself, use the provided `Makefile` by just running `cd
-src && make` on Linux. For other platforms, adjust the `Makefile`, or just run
-the `javac` and `jar` commands from the `Makefile` manually.
+To compile `BetterFileDialog` itself, use the provided `Makefile` by
+running `make` and `make demo` on Linux or MacOS. For Windows, try runing the
+`javac` and `jar` commands from the `Makefile` manually.
 
 ## API
 
@@ -115,18 +113,8 @@ public class BetterFileDialog {
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
 
-  /* Initialize the BetterFileDialog module.
-   * This must be called from the main thread, i.e. the thread which runs
-   * main(), and it should probably be called very early before any AWT/Swing or
-   * SWT code executes. On MacOS, the jvm must have been started with the
-   * -XstartOnMainThread option.
-   * This function does not return, but will (asynchronously) run the three given
-   * tasks.
-   * @param awtTask - work to be executed on the AWT/Swing thread.
-   * @param swtTask - work to be executed on the SWT thread.
-   * @param mainTask - work to be executed on a newly-created thread.
-   */
-  public static void init(Runnable awtTask, Runnable swtTask, Runnable mainTask);
+  // Application name, (unavoidably) shown in the SWT menubar.
+  public static String appName = null;
 
   /**
    * Pop up an open-file dialog and return the selected file.
@@ -327,13 +315,16 @@ public class BetterFileDialog {
 
 ## Known Issues
 
-* On MacOS, messages are unavoidably printed to the console, such as:
+* The prompts are "system modal", meaning they float above of all applications,
+  not just above the calling application.
 
-      2023-06-30 20:53:24.616 java[28668:221731] +[CATransaction synchronize] called within transaction
-      2023-06-30 20:53:40.284 java[28668:221731] *** Assertion failure in -[AWTWindow_Normal _changeJustMain], NSWindow.m:14356
-
-* On Linux, the popup dialogs are system-modal, rather than
-  application-modal as most Linux modals would normally be.
+* There may be some user-visible quirks while dialogs are open, due to how the
+  dialogs are created: As of version 2.0.0, each dialog is created in a separate
+  java processes. On MacOS (and perhaps Linux with Unity desktop), this means a
+  mostly-empty and useless menubar will be visible at the top of the screen
+  while the dialog is open, and there may temprarily be an extra icon in the
+  dock. The name of the menubar can be customized by setting
+  `BetterFileDialog.appName`.
 
 * File extensions longer than 4 characters are not properly case-insensitive
   on all platforms.

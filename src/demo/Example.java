@@ -275,24 +275,21 @@ class Example extends JFrame
 
   public static void main(String[] args)
   {
-    final boolean sysLook = (args.length > 0 && args[0].equals("system"));
-
-    Runnable awtTask = () -> {
-      try {
-        if (sysLook) {
-          System.out.println("Using system look and feel");
-          UIManager.setLookAndFeel( UIManager.getSystemLookAndFeelClassName() );
-        } else {
-          System.out.println("Using default look and feel");
-        }
-      } catch(Exception e) {
-        e.printStackTrace();
-      }
-      new Example().setVisible(true);
-    };
-
     BetterFileDialog.traceLevel = 0;
-    BetterFileDialog.init(awtTask, null, null);
+
+    boolean sysLook = (args.length > 0 && args[0].equals("system"));
+    try {
+      if (sysLook) {
+        System.out.println("Using system look and feel");
+        UIManager.setLookAndFeel( UIManager.getSystemLookAndFeelClassName() );
+      } else {
+        System.out.println("Using default look and feel");
+      }
+    } catch(Exception e) {
+      e.printStackTrace();
+    }
+
+    new Example().setVisible(true);
   }
 
 }

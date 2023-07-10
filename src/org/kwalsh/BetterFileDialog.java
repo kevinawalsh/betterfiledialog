@@ -6,22 +6,46 @@ import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.Frame;
 import java.awt.Point;
-import java.awt.Toolkit;
 import java.awt.Window;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import javax.swing.JDialog;
 import javax.swing.JOptionPane;
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.widgets.DirectoryDialog;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.FileDialog;
-import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Shell;
 
+// New strategy: Multi-process
+//
+// * Client code (swing/awt) will launch an entirely new java process, which
+//   will be pure SWT and open the dialog. The main process (client side) will
+//   make some effort to be sort-of modal, disabling windows, etc., on a best
+//   effort basis. This will not be perfect. There will be an SWT menubar,
+//   temporarily, while the dialog is displayed. These will be harmless or,
+//   perhaps do something useful, hopefully.
+//
+// * Communication between the main process (client side) and child process
+//   (dialog handler) will be over stdin/stdout and command-line arguments.
+//
+// * There is a race condition (at least on Mac OS), where if the SWT FileDialog
+//   is opened too quickly, the SWT menubar doesn't show at all. Maybe that's a
+//   good thing? It does seem to temprarily break the apple menu (and the entire
+//   menubar). Basically acts like an invisible, unresponsive menubar. It's not
+//   clear how reliable this race condition is... even a small sleep is enough
+//   to cause the SWT menubar to appear.
+//
 // Current known issues:
+//
+// * On MacOS, there is an SWT menubar showing in the main, top of screen
+//   application bar. It isn't currently functional, and is actively misleading
+//   as the Quit, Help, and other options don't work properly. These don't look
+//   easy to make work, and it seems impossible to remove or eliminate the
+//   menubar. Worse, the presence of the SWT menubar blocks AWT/Swing menubars
+//   from being placed in the main, top of screen application bar, so they
+//   appear inside AWT/Swing windows (Frame/JFrame, Dialog/JDialog) instead.
+//   (This might happen on Linux Unity-based desktops too? Not tested.)
 //
 // * On MacOS, messages are unavoidably printed to the console, such as:
 //   2023-06-30 20:53:24.616 java[28668:221731] +[CATransaction synchronize] called within transaction
@@ -46,99 +70,23 @@ import org.eclipse.swt.widgets.Shell;
 
 public class BetterFileDialog {
 
-  public static final String version = "1.0.3";
+  public static final String version = "2.0.0";
 
   // For debugging, zero means no printing, higher values yield more output.
   public static int traceLevel = 0;
 
-  // Platform type.
-  protected static boolean isMacOS;
-  protected static boolean isLinux;
-  protected static boolean isWindows;
+  static boolean isMacOS;
+  static boolean isLinux;
+  static boolean isWindows;
 
-  // SWT Display used for creating SWT FileDialog and DirectoryDialog modals.
-  protected static Display swtDisplay;
-
-
-  /**
-   * Initialize the BetterFileDialog module.
-   * This must be called from the main thread, i.e. the thread which runs
-   * main(), and it should probably be called very early before any AWT/Swing or
-   * SWT code executes. On MacOS, the jvm must have been started with the
-   * -XstartOnMainThread option.
-   * This function does not return, but will (asynchronously) run the three given
-   * tasks.
-   * @param awtTask - work to be executed on the AWT/Swing thread.
-   * @param swtTask - work to be executed on the SWT thread.
-   * @param mainTask - work to be executed on a newly-created thread.
-   */
-  public static void init(Runnable awtTask, Runnable swtTask, Runnable mainTask) {
-
-    if (traceLevel > 0) {
-      System.out.println("BetterFileDialog: Initializing");
-    }
-
+  static {
     isMacOS = System.getProperty("os.name").toLowerCase().startsWith("mac");
     isLinux = System.getProperty("os.name").toLowerCase().startsWith("linux");
     isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
-   
-    long pid = ProcessHandle.current().pid();
-
-    if (traceLevel > 1)
-      System.out.println("BetterFileDialog: Running as process " + pid +" on" +
-          (isMacOS ? " MacOS" : "") +
-          (isLinux ? " Linux" : "") +
-          (isWindows ? " Windows" : ""));
-
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Checking jvm options");
-    String env = System.getenv("JAVA_STARTED_ON_FIRST_THREAD_" + pid);
-    if (isMacOS && !"1".equals(env)) {
-      System.err.println("BetterFileDialog: Critical error, JVM on MacOS must\n" +
-          "be executed with the -XstartOnFirstThread command-line option.\n");
-      boolean quit = true;
-      try { quit = showFatalError(); }
-      catch (Exception e) { }
-      if (quit)
-        System.exit(1);
-    }
-
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Preparing SWT display");
-    swtDisplay = new Display();
-
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Loading AWT toolkit");
-		Toolkit.getDefaultToolkit();
-
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Starting application tasks");
-    if (awtTask != null)
-      EventQueue.invokeLater(awtTask);
-    if (swtTask != null)
-      swtDisplay.asyncExec(swtTask);
-    if (mainTask != null)
-      new Thread(mainTask, "BetterFileDialog-Main-Task").start();
-
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Starting event loop");
-    while (!swtDisplay.isDisposed())
-    {
-      if (!swtDisplay.readAndDispatch())
-        swtDisplay.sleep();
-    }
-    if (traceLevel > 0)
-      System.out.println("BetterFileDialog: Event loop terminated");
   }
 
-  protected static boolean showFatalError() {
-    String msg = "The JVM on MacOS must be executed with"
-        + " the -XstartOnFirstThread command-line option.";
-    String[] options = { "Quit", "Continue Anyway" };
-    int choice = JOptionPane.showOptionDialog(null, msg, "Critical Error",
-        0, JOptionPane.ERROR_MESSAGE, null, options, options[0]);
-    return (choice != 1);
-  }
+  // Application name, (unavoidably) shown in the SWT menubar.
+  public static String appName = null;
 
   /**
    * Pop up an open-file dialog and return the selected file.
@@ -162,8 +110,8 @@ public class BetterFileDialog {
   public static File openFile(Component parent, String title,
       File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_OPEN, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        toString(initialPath), filters);
+    dlg.exec();
     return toFile(dlg.fileResult);
   }
   // initialPath - May be null. If it contains a separator, then the trailing
@@ -173,8 +121,8 @@ public class BetterFileDialog {
   public static String openFile(Component parent, String title,
       String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_OPEN, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        initialPath, filters);
+    dlg.exec();
     return dlg.fileResult;
   }
 
@@ -185,8 +133,8 @@ public class BetterFileDialog {
   public static File[] openFiles(Component parent, String title,
       File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_MULTI, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        toString(initialPath), filters);
+    dlg.exec();
     int n = dlg.multiResult == null ? 0 : dlg.multiResult.length;
     if (n == 0)
       return null;
@@ -201,8 +149,8 @@ public class BetterFileDialog {
   public static String[] openFiles(Component parent, String title,
       String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_MULTI, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        initialPath, filters);
+    dlg.exec();
     int n = dlg.multiResult == null ? 0 : dlg.multiResult.length;
     if (n == 0)
       return null;
@@ -234,15 +182,15 @@ public class BetterFileDialog {
   public static File saveFile(Component parent, String title,
       File initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_SAVE, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        toString(initialPath), filters);
+    dlg.exec();
     return toFile(dlg.fileResult);
   }
   public static String saveFile(Component parent, String title,
       String initialPath, Filter... filters) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_SAVE, parent, title,
-        toDir(initialPath), toName(initialPath), filters);
-    dlg.doModal();
+        initialPath, filters);
+    dlg.exec();
     return dlg.fileResult;
   }
 
@@ -257,189 +205,137 @@ public class BetterFileDialog {
    */
   public static File pickDir(Component parent, String title, File initialDir) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_DIR, parent, title,
-        toDir(initialDir), null, null);
-    dlg.doModal();
+        toString(initialDir), null);
+    dlg.exec();
     return toFile(dlg.dirResult);
   }
   public static String pickDir(Component parent, String title, String initialDir) {
     BetterFileDialog dlg = new BetterFileDialog(MODE_DIR, parent, title,
-        toDir(initialDir), null, null);
-    dlg.doModal();
+        initialDir, null);
+    dlg.exec();
     return dlg.dirResult;
   }
 
   protected String dirResult;
   protected String fileResult;
-  protected String fileResultExtension; // for save, if needs new extension
-  protected boolean swtChecksOverwrite;
   protected String[] multiResult; // for multi
 
   protected static final int MODE_OPEN = 1;
   protected static final int MODE_SAVE = 2;
   protected static final int MODE_MULTI = 3;
   protected static final int MODE_DIR = 4;
+  static final String[] PROMPTS = {
+    "", "openfile", "savefile", "openfiles", "pickdir"
+  };
 
   protected int mode;
   protected String title;
-  protected String initialDir;
-  protected String suggestedFileName;
+  protected String initialPath;
   protected Filter[] filters;
 
   protected Component awtParent;
+  protected Point loc;
   protected JDialog awtBlocker;
-  protected Shell swtShell;
   protected CountDownLatch awtBlockerIsVisible;
 
-  protected BetterFileDialog(int mode, Component parent, String title,
-      String initialDir, String suggestedFileName, Filter[] filters) {
+  protected BetterFileDialog(int mode, Component parent,
+      String title, String initialPath, Filter[] filters) {
     this.mode = mode;
-    this.awtParent = parent;
     this.title = title;
-    this.initialDir = initialDir;
-    this.suggestedFileName = suggestedFileName;
+    this.awtParent = parent;
+    this.initialPath = initialPath;
     this.filters = filters;
     this.awtBlockerIsVisible = new CountDownLatch(1);
+
+    if (awtParent != null) {
+      loc = awtParent.getLocationOnScreen();
+      Dimension d = awtParent.getSize();
+      loc.x += d.width/2;
+      loc.y += d.height/2;
+      if (traceLevel > 2)
+        System.out.println("BetterFileDialog: Centering over parent at " + loc);
+    }
   }
 
-  // This can be called from AWT/Swing thread or some unrelated thread, but it
-  // wasn't designed to be called from the SWT thread.
-  protected void doModal() {
-    // Determine position
-    final Point pt;
-    if (awtParent != null) {
-      pt = awtParent.getLocationOnScreen();
-      Dimension d = awtParent.getSize();
-      pt.x += d.width/2;
-      pt.y += d.height/2;
-      if (traceLevel > 2)
-        System.out.println("BetterFileDialog: Centering over parent at " + pt);
-    } else {
-      pt = null;
-    }
-
+  protected void exec() {
     // SWT half
-    swtDisplay.asyncExec(() -> openSWTModal(pt));
+    new Thread(() -> execSWTPeer()).start();
 
     // AWT half
     if (EventQueue.isDispatchThread()) {
       openAWTBlocker();
     } else {
-      try {
-        EventQueue.invokeAndWait(() -> openAWTBlocker());
-      } catch (Exception e) {
-        e.printStackTrace();
-      }
+      try { EventQueue.invokeAndWait(() -> openAWTBlocker()); }
+      catch (Exception e) { e.printStackTrace(); }
     }
   }
 
-  // This must be called from SWT thread.
-  protected void openSWTModal(Point pt) {
+  protected Process peer;
+  protected String peerError;
+  protected String peerResultDir;
+  protected String[] peerResults = new String[1];
+  protected int peerCountLeft = 1;
+  protected boolean peerCanceled;
+  protected boolean peerCheckedOverwrite = false;
+  protected String peerSuggestsExtension;
+
+  // This must be called from background thread.
+  protected void execSWTPeer() {
+    Thread.currentThread().setName("SWT Peer Thread ");
     try {
-      // On linux, the FileDialog modal behavior does not work properly: it
-      // stays over swtShell, but neither the FileDialog or swtShell stays above
-      // other windows (like our awtBlocker window). The best, but still
-      // incomplete and non-ideal approach is to style the shell as ON_TOP of
-      // all other windows (including other applications, and mark the
-      // awtBlocker as non-focusable. Other ideas that don't seem to reliably
-      // work:
-      // * Use SWT_AWT.new_shell(awtParent), or any variations of this with modal
-      //   or ON-TOP styles, so that the FileDialog modal will respect the
-      //   AWT parent.
-      // * Varous combinations of making awtBlocker non-focusable.
-      // * Not using awtBlocker at all.
-      // * Listening for window, focus, component, or other AWT events on
-      //   awtBlocker and/or awtParent, then trying to bring the shell or
-      //   FileDialog back into focus or back to the top of the window stack.
-      // * Calling shell.forceActive() or shell.setActive() whenever awtBlocker
-      //   gains focus. The problem here is that display.asyncExec() seems to
-      //   sometimes miss events due to some kind of race condition, and
-      //   only executes them much later after other events, or sometimes
-      //   seeming not executing them at all.
-      // * Using shell.syncExecute() instead. This one has the same race
-      //   condition apparently, but also hangs because the event doesn't complete
-      //   in a timely fashion (or at all). One suspect for the race is the
-      //   event loop, which typically looks like:
-      //     while (!swtDisplay.isDisposed())
-      //       if (!swtDisplay.readAndDispatch())
-      //         swtDisplay.sleep();
-      //   Perhaps readAndDispatch() returns false because the event queue is
-      //   empty, then the asyncEvent/syncEvent queues an event before the
-      //   sleep() call? The documentation of sleep() seems to imply that only
-      //   *new* events will wake it up, but not existing events. If so, that seems
-      //   like a race condition waiting to happen. Unforunately, the event loop
-      //   in question is inside FileDialog, not the one we use in the
-      //   initializer above. Also, this seems too ovious to be a real bug.
-      // * Calling display.wake(), repeatedly in a timed loop with a semaphore
-      //   to notify when successful, to try to resolve the race condition.
-      // * Calling display.post() via display.syncEvent() repeatedly in a timed
-      //   loop with a semaphore to notify when successful, to try to resolve
-      //   the race condition.
-      // * Using display.post() to send MouseDown events to swtShell whenever
-      //   FileDialog loses its focus. The trouble here is reliably knowing when
-      //   to send these events. Out of the many listeners attempted on the
-      //   awtParent or awtBlocker, none catch even fairly common obvious cases,
-      //   like clicking the title bar of awtParent.
-      // * Adding an AWT Toolkit listener for AWTEvents doesn't even catch th
-      //   title-bar click. It seems that raising and lowering the windows is
-      //   entirely done through the system window manager without AWT/Swing/SWT
-      //   intervention or notification.
-      
-      if (isLinux || isWindows)
-        swtShell = new Shell(swtDisplay, SWT.ON_TOP);
-      else
-        swtShell = new Shell(swtDisplay);
-
-      if (pt == null) {
-        Rectangle b = swtDisplay.getPrimaryMonitor().getBounds();
-        pt = new Point(b.x + b.width/2, b.y + b.height/2);
-        if (traceLevel > 2)
-          System.out.println("BetterFileDialog: Centering on screen at " + pt);
-      }
-
-      if (isWindows) {
-        // On Windows, the FileDialog positions itself so the top left corner is
-        // on the shell, so we move the shell a bit to the left and up.
-        pt.x -= 250;
-        pt.y -= 150;
-      }
-
-      if (traceLevel > 1) {
-        Label x = new Label(swtShell, SWT.BORDER);
-        x.setSize(300,30);
-        x.setLocation(50, 50);
-        x.setText("SWT Shell for BetterFileDialog");
-        if (traceLevel < 3)
-          swtShell.setAlpha(150);
-        swtShell.setSize(400, 100);
-        swtShell.setLocation(pt.x - 200, pt.y - 50);
-      } else {
-        if (isLinux)
-          swtShell.setSize(2, 2); // On linux, Gtk prints console messages for size < 2
-        else
-          swtShell.setSize(0, 0);
-        swtShell.setLocation(pt.x, pt.y);
-        // swtShell.setVisible(false); // no effect on Linux
-        // swtShell.setAlpha(0); // works on Linux
-      }
-
-      swtShell.open(); // this is necessary for modal behavior of SWT to work properly
-
-      if (mode == MODE_OPEN) pickFile(SWT.OPEN);
-      else if (mode == MODE_MULTI) pickFile(SWT.MULTI);
-      else if (mode == MODE_SAVE) pickFile(SWT.SAVE);
-      else if (mode == MODE_DIR) pickDirectory();
-
+      openSWTPeer();
+      readSWTPeer();
     } catch (Exception e) {
+      peerError = "Exception: " + e.getMessage();
       e.printStackTrace();
+    } finally {
+      if (peer != null) {
+        peer.destroy();
+        peer = null;
+      }
     }
 
-    try {
-      if (swtShell != null) {
-        swtShell.close();
-        swtShell.dispose();
+    // Process results from peer.
+    if (peerCanceled) {
+      // do nothing
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Canceled by user");
+    } else if (peerError != null) {
+      // FIXME: fall back to Swing dialogs?
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Failed due to " + peerError);
+    } else if (peerCountLeft != 0) {
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Missing " + peerCountLeft +
+            " of " + peerResults.length + " results");
+    } else if (peerResults.length == 0) {
+      if (traceLevel > 0)
+        System.out.println("BetterFileDialog: Empty results.");
+    } else if (mode == MODE_OPEN || mode == MODE_SAVE) {
+      if (peerResults.length != 1) {
+        if (traceLevel > 0)
+          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+      } else {
+        fileResult = peerResults[0];
       }
-    } catch (Exception e) {
-      e.printStackTrace();
+    } else if (mode == MODE_MULTI) {
+      if (peerResults.length != 1) {
+        if (traceLevel > 0)
+          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+      } else if (peerResultDir == null) {
+        if (traceLevel > 0)
+          System.out.println("BetterFileDialog: Missing result directory");
+      } else {
+        multiResult = peerResults;
+        dirResult = peerResultDir;
+      }
+    } else if (mode == MODE_DIR) {
+      if (peerResults.length != 1) {
+        if (traceLevel > 0)
+          System.out.println("BetterFileDialog: Wanted 1 result but got " + peerResults.length);
+      } else {
+        dirResult = peerResults[0];
+      }
     }
 
     // Ensure awtBlocker is visible...
@@ -457,135 +353,102 @@ public class BetterFileDialog {
           awtParent.requestFocus();
       }
     });
+
   }
 
-  // This must be called from SWT thread.
-  protected void pickDirectory() {
-    DirectoryDialog dialog = new DirectoryDialog(swtShell);
-    if (title != null) {
-      if (isWindows) {
-        // Windows uses text as title but ignores the message
-        dialog.setText(title);
-        dialog.setMessage("Select a directory"); // ignored
-      } else if (isLinux) {
-        // Linux uses text as title and shows message at bottom of dialog
-        dialog.setText(title);
-        dialog.setMessage("Select a directory");
-      } else {
-        // MacOS uses message as title but ignores text
-        dialog.setText("Select a directory"); // ignored
-        dialog.setMessage(title);
-      }
+  // This must be called from background thread.
+  protected void openSWTPeer() throws Exception {
+    String java_exe = ProcessHandle.current().info().command().orElse("java");
+    String classpath = System.getProperty("java.class.path");
+
+    ArrayList<String> cmd = new ArrayList<>();
+    cmd.add(java_exe);
+    if (isMacOS)
+      cmd.add("-XstartOnFirstThread");
+    cmd.add("-cp");
+    cmd.add(classpath);
+    cmd.add("org.kwalsh.BetterFileDialogPeer");
+    if (appName != null) {
+      cmd.add("--appname");
+      cmd.add(appName);
     }
-    if (initialDir != null)
-      dialog.setFilterPath(initialDir);
-
-    dirResult = dialog.open();
-
-    if (traceLevel > 0) {
-      System.out.println("BetterFileDialog: Result=" + dirResult);
-      System.out.println("BetterFileDialog: FilterPath=" + dialog.getFilterPath());
+    cmd.add("--prompt");
+    cmd.add(PROMPTS[mode]);
+    if (loc != null) {
+      cmd.add("--loc");
+      cmd.add(loc.x+","+loc.y);
     }
-  }
-
-  // This must be called from SWT thread.
-  protected void pickFile(int style) {
-    FileDialog dialog = new FileDialog(swtShell, style);
-    if (title != null)
-      dialog.setText(title);
-    if (initialDir != null)
-      dialog.setFilterPath(initialDir);
-
+    if (initialPath != null) {
+      cmd.add("--path");
+      cmd.add(initialPath);
+    }
     if (filters != null && filters.length > 0) {
-      String[] e = new String[filters.length];
-      String[] n = new String[filters.length];
-      for (int i = 0; i < filters.length; i ++) {
-        e[i] = filters[i].getExtensions();
-        n[i] = filters[i].getDescription(); // would name be better for UI?
-      }
-      dialog.setFilterExtensions(e);
-      dialog.setFilterNames(n);
-      dialog.setFilterIndex(0);
-    } else if (isWindows) {
-      // Windows fix: with no filters, Windows adds a poorly-formatted filter
-      // named "*.*" with no description. Use the ANY_FILTER instead in this
-      // case.
-      dialog.setFilterExtensions(new String[] { ANY_FILTER.getExtensions() });
-      dialog.setFilterNames(new String[] { ANY_FILTER.getDescription() });
-      dialog.setFilterIndex(0);
-    }
-
-    if (suggestedFileName != null) {
-      if (style == SWT.SAVE) {
-        dialog.setFileName(suggestedFileName);
-      } else {
-        // File must exist, otherwise initialDir isn't obeyed properly.
-        File f = new File(initialDir, suggestedFileName);
-        if (f.exists())
-          dialog.setFileName(suggestedFileName);
+      for (Filter f : filters) {
+        cmd.add("--filter");
+        cmd.add(f.encodeForPeer());
       }
     }
-
-    // We set SWT's overwrite-checking to false, so that we can add the default
-    // extension, if needed, before doing any such checking.
-    dialog.setOverwrite(false);
-    // On some platforms, like MacOS 10.15 and higher, setting
-    // overwrite-checking to false does not work, so SWT might still check for
-    // overwrites.
-    swtChecksOverwrite = dialog.getOverwrite();
-
-    String ret = dialog.open();
-
     if (traceLevel > 0) {
-      System.out.println("BetterFileDialog: Result=" + ret);
-      System.out.println("BetterFileDialog: FilterPath=" + dialog.getFilterPath());
-      System.out.println("BetterFileDialog: FileName=" + dialog.getFileName());
-      String[] a = dialog.getFileNames();
-      if (a == null) {
-        System.out.println("BetterFileDialog: FileNames=(null)");
-      } else if (a.length == 0) {
-        System.out.println("BetterFileDialog: FileNames=(empty array)");
-      } else {
-        for (int i = 0; i < a.length; i++)
-        System.out.println("BetterFileDialog: FileNames["+i+"]="+a[i]);
-      }
-    }
-    
-    if (ret == null)
-      return;
-
-    if ("".equals(ret))
-      return; // empty filename seems like a bad idea
-
-    if (mode == MODE_SAVE) {
-      // Suppose there are two filters: "*.jpg;*.jpeg" and "*.png"
-      // and the user selects the "*.jpg;*.jpeg" filter.
-      // If the user enters "foo.jpg", we leave it alone, as it
-      // matches the chosen filter.
-      // If the user enters "foo.png", we leave it alone, as it
-      // still matches an acceptable filter.
-      // If the user enters "foo", we change it to "foo.jpg"
-      // because that's the default extension for the filter they chose.
-      if (!matchesFilterExtension(ret, filters)) {
-        // This happens only if there are some filters, and none of the filters
-        // have wildcards, so we can be assured there is a default extension for
-        // whichever filter was chosen by the user.
-        int idx = dialog.getFilterIndex();
-        // BUG: On (some) Linux platforms, getFilterIndex() does not work. We
-        // use the first filter in that case.
-        if (idx < 0 || idx >= filters.length) // is this possible?
-          idx = 0;
-        String ext = filters[idx].getDefaultExtension();
-        fileResultExtension = ext;
-      }
-      fileResult = ret;
-    } else if (mode == MODE_OPEN) {
-      fileResult = ret;
-    } else if (mode == MODE_MULTI) {
-      dirResult = dialog.getFilterPath();
-      multiResult = dialog.getFileNames();
+      cmd.add("--debug");
+      cmd.add("" + traceLevel);
     }
 
+    ProcessBuilder pb = new ProcessBuilder(cmd);
+    pb.redirectErrorStream(true);
+    if (traceLevel > 1)
+      System.out.println("BetterFileDialog: " + String.join(" ", cmd));
+
+    peer = pb.start();
+  }
+  
+  // This must be called from background thread.
+  protected void readSWTPeer() throws Exception {
+    try (InputStream is = peer.getInputStream();
+        Reader isr = new InputStreamReader(is);
+        BufferedReader r = new BufferedReader(isr)) {
+      while (true) {
+        String line = r.readLine();
+        if (traceLevel > 1)
+          System.out.println("BetterFileDialog: > " + line);
+        if (line.startsWith("EXIT")) {
+          break;
+        } else if (line.startsWith("STATUS: checked overwrite")) {
+          peerCheckedOverwrite = true;
+        } else if (line.startsWith("STATUS: suggest extension: ")) {
+          peerSuggestsExtension = line.substring(27);
+          if (peerSuggestsExtension.length() == 0)
+            peerSuggestsExtension = null;
+        } else if (line.startsWith("STATUS: ")) {
+          // ignore...
+        } else if (line.startsWith("RESULT: ")) {
+          if (peerCountLeft <= 0) {
+            peerError = "too many results";
+            if (traceLevel <= 1) break;
+          } else {
+            peerResults[peerResults.length - peerCountLeft] = line.substring(8);
+            peerCountLeft--;
+            if (traceLevel <= 1 && peerCountLeft == 0) break;
+          }
+        } else if (line.startsWith("RESULT DIR: ")) {
+          peerResultDir = line.substring(12);
+        } else if (line.startsWith("RESULT COUNT: ")) {
+          try { peerCountLeft = Integer.parseInt(line.substring(14)); }
+          catch (Exception e) { }
+          if (peerCountLeft <= 0) {
+            peerError = "invalid count";
+            if (traceLevel <= 1) break;
+          } else {
+            peerResults = new String[peerCountLeft];
+          }
+        } else if (line.startsWith("ERROR: ")) {
+          peerError = line.substring(7);
+          if (traceLevel <= 1) break;
+        } else if (line.startsWith("CANCELED")) {
+          peerCanceled = true;
+          if (traceLevel <= 1) break;
+        }
+      } 
+    }
   }
 
   // This is designed for simple extensions that do not themselves contain dots.
@@ -632,8 +495,8 @@ public class BetterFileDialog {
     }
   }
 
-  protected static boolean matchesFilterExtension(String path, Filter[] filters) {
-    if (filters == null || filters.length == 0)
+  protected static boolean matchesFilterExtension(String path, ArrayList<Filter> filters) {
+    if (filters == null || filters.size() == 0)
       return true;
     for (Filter f : filters)
       if (f.acceptExtension(path))
@@ -667,26 +530,29 @@ public class BetterFileDialog {
     awtBlocker.setFocusableWindowState(false);
     awtBlocker.setFocusable(false);
 
-    // Enqueue a task to notify SWT thread that awtBlocker is now visible.
+    // Clever trick...
+    // Enqueue a task to notify background thread that awtBlocker is now visible.
     // Because we are already on the AWT/Swing thread, this task won't get
     // executed until *after* the setVisible(true) below takes effect.
     EventQueue.invokeLater(() -> awtBlockerIsVisible.countDown());
 
     // Bring up the awtBlocker, to disable all input to AWT/Swing. After making
-    // the awtBlocker visible, this blocks until the SWT thread hides it. But
+    // the awtBlocker visible, this blocks until the background thread hides it. But
     // during this time AWT/Swing events will still be processed. In particular,
     // the above task we just enqueued to do countDown() will execute after the
     // awtBlocker becomes visible.
     awtBlocker.setVisible(true);
 
-    // By here, SWT thread must have finished and hid awtBlocker.
+    // By here, background thread must have finished and hid awtBlocker.
     awtBlocker.dispose();
 
     // Check extension and overwrite after save dialogs
     if (mode == MODE_SAVE && fileResult != null) {
+
+
       // Change extension if needed
-      if (fileResultExtension != null) {
-        String replacement = ensureExtension(fileResult, fileResultExtension);
+      if (peerSuggestsExtension != null) {
+        String replacement = ensureExtension(fileResult, peerSuggestsExtension);
         if (replacement == null) { // user canceled
           fileResult = null;
           return;
@@ -694,7 +560,7 @@ public class BetterFileDialog {
         if (!replacement.equals(fileResult)) {
           // name changed, re-confirm overwriting
           fileResult = replacement;
-          swtChecksOverwrite = false;
+          peerCheckedOverwrite = false;
         }
       }
       // Sanity check: can't write to directory
@@ -715,7 +581,7 @@ public class BetterFileDialog {
         return;
       }
       // Sanity check: warn on overwrite, if SWT hasn't already done so
-      if (file.exists() && !swtChecksOverwrite) {
+      if (file.exists() && !peerCheckedOverwrite) {
         int confirm = JOptionPane.showConfirmDialog(awtParent,
             "A file named \"" + file.getName() + "\" exists. Overwrite it?",
             "Confirm Overwrite",
@@ -728,63 +594,12 @@ public class BetterFileDialog {
     }
   }
 
-  // Check whether overwrite warning can be suppressed. Mac OS 10.15 and higher,
-  // for example, will always warn, regardless of attempts to disable it.
-  // private static boolean supportsOverwriteSuppression, checkedForOverwriteSuppression;
-  // private static Object lockForOverwriteCheck = new Object();
-  // public static boolean canSuppressOverwrite() {
-  //   synchronized (lockForOverwriteCheck) {
-  //     if (!checkedForOverwriteSuppression) {
-  //       checkedForOverwriteSuppression = true;
-  //       swtDisplay.syncExec(() -> {
-  //         Shell swtShell = new Shell(swtDisplay);
-  //         FileDialog dialog = new FileDialog(swtShell, SWT.SAVE);
-  //         dialog.setOverwrite(false);
-  //         supportsOverwriteSuppression = (dialog.getOverwrite() == false);
-  //         swtShell.dispose();
-  //       });
-  //     }
-  //     return supportsOverwriteSuppression;
-  //   }
-  // }
+  private static String toString(File path) {
+    return path == null ? null : path.getPath();
+  }
 
   private static File toFile(String path) {
     return path == null ? null : new File(path);
-  }
-
-  private static String toDir(File path) {
-    if (path == null)
-      return null;
-    if (path.isDirectory())
-      return path.getPath();
-    File parent = path.getParentFile();
-    if (parent != null)
-      return parent.getPath();
-    return null;
-  }
-
-  private static String toName(File path) {
-    if (path == null)
-      return null;
-    if (!path.isDirectory())
-      return path.getName();
-    return null;
-  }
-
-  private static String toDir(String path) {
-    if (path == null)
-      return null;
-    if (path.endsWith(File.separator))
-      return path;
-    return toDir(new File(path));
-  }
-
-  private static String toName(String path) {
-    if (path == null)
-      return null;
-    if (path.endsWith(File.separator))
-      return null;
-    return toName(new File(path));
   }
 
   // Some pre-defined filters, for convenience.
@@ -834,6 +649,8 @@ public class BetterFileDialog {
      */
     public Filter(String name, String... extension)
     {
+      if (name == null)
+        throw new IllegalArgumentException("Name must not be null");
       this.name = name;
 
       wildcard = false;
@@ -1021,6 +838,13 @@ public class BetterFileDialog {
           return true;
       }
       return false;
+    }
+
+    protected String encodeForPeer() {
+      String s = name + ":" + extensions[0];
+      for (int i = 1; i < extensions.length; i++)
+        s += "," + extensions[i];
+      return s;
     }
 
   } // end of Filter
