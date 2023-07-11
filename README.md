@@ -1,5 +1,5 @@
 # BetterFileDialog
-Better file load/save dialogs for Java AWT and Swing applications.
+A (mostly failed) experiment at making better file load/save dialogs for Java AWT and Swing applications.
 
 It's 2023, and there is still no decent, cross-platform, and reliable way for
 Java AWT or Swing applications to display a file load/save dialog or a directory
@@ -8,10 +8,15 @@ under the covers, with a light weight layer on top to allow the SWT dialogs to
 be accessed from AWT and Swing applications, and smoothing over lots of SWT
 quirks and bugs.
 
+Because of limitations in Java, SWT, and AWT/Swing integration, I don't
+recommend using this project. Instead, just use the built-in dialogs
+(JFileChooser for Swing, FileDialog for AWT) and suffer their limitations. But
+if you really want native dialogs...
+
 For any AWT or Swing based Java application, `BetterFileDialog` takes the place
 of `java.awt.FileDialog` and `javax.swing.JFileChooser`. It is simpler to use,
-more flexible, provides a better user interfaces, and works more consistently
-across platforms. It provides:
+more flexible, provides a better user interfaces in some ways (but not others),
+and works more consistently across platforms. It provides:
 
 * An "Open File" dialog, with selectable filters based on file extensions, along
   with similar "Open Files" and "Save File" dialog.
@@ -22,11 +27,13 @@ All of these use platform-native dialogs on Linux, MacOS, and Windows, and all
 supporting platform-native keyboard navigation and shortcuts, platform-native
 drag-and-drop, and platform-native icons, fonts, and styling.
 
-There are limitations. The dialogs are "system-modal", rather than
-"application-modal". This is annoying, but is difficult to work around due to
-limitations in SWT, in Java, and in integrating AWT/Swing in the same process as
-SWT. As of version 2.0.0, the SWT code and dialogs are run in a separate,
-dedicated java process.
+There are limitations. The dialogs are not properly modal, the application
+menubar (at the top of the screen) is broken while the dialogs are shown, and
+the system tray (MacOS "Dock") and application switcher (alt-tab) icons and
+names are pretty terrible while the dialogs are open. This is annoying, but is
+difficult to work around due to limitations in SWT, in Java, and in integrating
+AWT/Swing in the same process as SWT. As of version 2.0.0, the SWT code and
+dialogs are run in a separate, dedicated java process.
 
 ## Usage
 
